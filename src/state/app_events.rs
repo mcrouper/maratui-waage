@@ -87,6 +87,13 @@ pub enum AppEvent {
     /// Device loop finished the blocking HX711 read for the current transient step
     /// (Taring or Calibrating) and reports whether it succeeded.
     CalibrationStepResult { success: bool },
+
+    /// `scale-test` build variant only: raw (uncalibrated, untared) HX711 ADC counts read
+    /// straight from each cell, bypassing calibration entirely.
+    RawWeightUpdated {
+        left: Option<i32>,
+        right: Option<i32>,
+    },
 }
 
 impl AppEvent {
@@ -179,6 +186,9 @@ impl std::fmt::Display for AppEvent {
             AppEvent::CalibrationCancel => write!(f, "Calibration Cancel"),
             AppEvent::CalibrationStepResult { success } => {
                 write!(f, "Calibration Step Result: success={}", success)
+            }
+            AppEvent::RawWeightUpdated { left, right } => {
+                write!(f, "Raw weight updated: left={:?} right={:?}", left, right)
             }
         }
     }

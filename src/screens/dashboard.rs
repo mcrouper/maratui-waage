@@ -54,18 +54,41 @@ impl Board for Dashboard {
         render_cup_counter(state.cup_counter, counter_area, buf);
         render_boiler_gauge(t_frame, boiler_area, buf);
 
-        // rule of thirds: 1 | 3 | 1
-        let [info_col, timer_col, gauge_col] = Layout::horizontal([
-            Constraint::Fill(1),
-            Constraint::Fill(3),
-            Constraint::Fill(1),
-        ])
-        .areas(content_area);
-
-        render_info_col(t_frame, info_col, buf);
-        render_shot_gauge(state, gauge_col, buf);
-        render_timer(state, timer_col, frame);
+        render_main_content(state, t_frame, content_area, frame);
     }
+}
+
+/// Normal build: info column | timer | shot gauge, rule of thirds (1:3:1).
+#[cfg(not(feature = "scale-test"))]
+fn render_main_content(
+    state: &GlobalAppState,
+    t_frame: &TelemetryFrame,
+    content_area: Rect,
+    frame: &mut Frame,
+) {
+    let buf = frame.buffer_mut();
+    let [info_col, timer_col, gauge_col] = Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Fill(3),
+        Constraint::Fill(1),
+    ])
+    .areas(content_area);
+
+    render_info_col(t_frame, info_col, buf);
+    render_shot_gauge(state, gauge_col, buf);
+    render_timer(state, timer_col, frame);
+}
+
+/// `scale-test` build: no Mara telemetry to show, so the whole content area becomes one big
+/// raw (uncalibrated, untared) scale readout — right cell, left cell, and their sum, stacked.
+#[cfg(feature = "scale-test")]
+fn render_main_content(
+    state: &GlobalAppState,
+    _t_frame: &TelemetryFrame,
+    content_area: Rect,
+    frame: &mut Frame,
+) {
+    render_raw_weight(state, content_area, frame);
 }
 
 fn render_mode_banner(t_frame: &TelemetryFrame, area: Rect, buf: &mut Buffer) {
@@ -413,6 +436,49 @@ fn render_weight_half(
         .build();
 
     frame.render_widget(big_text, display_area);
+}
+
+/// `scale-test` build only: raw (uncalibrated, untared, EMA-smoothed) HX711 counts for right
+/// cell, left cell, and their sum — stacked in that order, filling the whole content area.
+///
+/// Uses `PixelSize::Quadrant`, same as the normal Weight/Timer display — that's the smallest
+/// size confirmed to render correctly on this display's embedded font. The smaller
+/// `ThirdHeight`/`Sextant`/etc. sizes pull glyphs from a much rarer Unicode block (Legacy
+/// Computing Symbols) that this font doesn't have, and render as garbage on real hardware.
+/// No bordered `Block` here (unlike the normal Weight box) — three Quadrant-height lines
+/// (4 rows each = 12) barely fit the content area as it is; a border would push it over.
+#[cfg(feature = "scale-test")]
+const RAW_WEIGHT_PIXEL_SIZE: PixelSize = PixelSize::Quadrant;
+
+#[cfg(feature = "scale-test")]
+fn render_raw_weight(state: &GlobalAppState, area: Rect, frame: &mut Frame) {
+    let buf = frame.buffer_mut();
+
+    let [title_area, digits_area] =
+        Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
+
+    Paragraph::new(Line::from("WEIGHT (raw, uncalibrated)"))
+        .centered()
+        .style(STYLE_DARK_GRAY)
+        .render(title_area, buf);
+
+    let fmt = |v: Option<i32>| v.map(|v| v.to_string()).unwrap_or_else(|| "--".to_string());
+    let sum = match (state.raw_weight_left, state.raw_weight_right) {
+        (None, None) => None,
+        (left, right) => Some(left.unwrap_or(0) + right.unwrap_or(0)),
+    };
+
+    let big_text = BigText::builder()
+        .pixel_size(RAW_WEIGHT_PIXEL_SIZE)
+        .centered()
+        .lines(vec![
+            Line::styled(format!("R {}", fmt(state.raw_weight_right)), STYLE_CYAN),
+            Line::styled(format!("L {}", fmt(state.raw_weight_left)), STYLE_WHITE),
+            Line::styled(format!("S {}", fmt(sum)), STYLE_YELLOW),
+        ])
+        .build();
+
+    frame.render_widget(big_text, digits_area);
 }
 
 fn timer_inner_area(area: Rect) -> Rect {

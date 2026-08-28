@@ -138,6 +138,30 @@ impl ScaleReadingFilter {
     }
 }
 
+/// Exponential-moving-average damper for raw (uncalibrated) ADC counts, used by the
+/// `scale-test` build variant so on-screen jumps between samples stay small even without
+/// `ScaleReadingFilter`'s calibration-based step limiting.
+#[derive(Debug, Default)]
+pub struct RawSignalSmoother {
+    smoothed: Option<f32>,
+}
+
+impl RawSignalSmoother {
+    /// Blend `raw` into the running average and return the smoothed value, rounded.
+    ///
+    /// `alpha` is the weight given to the new sample, in `(0.0, 1.0]`; smaller values damp
+    /// harder (slower to move, smaller jumps) but lag more behind real changes.
+    pub fn smooth(&mut self, raw: i32, alpha: f32) -> i32 {
+        let raw = raw as f32;
+        let next = match self.smoothed {
+            Some(prev) => prev + alpha * (raw - prev),
+            None => raw,
+        };
+        self.smoothed = Some(next);
+        next.round() as i32
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,5 +261,31 @@ mod tests {
         };
         assert_eq!(filter.accept(1000, calibration), Some(0));
         assert_eq!(filter.accept(1000 + 20 * 300, calibration), None);
+    }
+
+    #[test]
+    fn smoother_first_sample_passes_through() {
+        let mut smoother = RawSignalSmoother::default();
+        assert_eq!(smoother.smooth(1000, 0.2), 1000);
+    }
+
+    #[test]
+    fn smoother_damps_a_sudden_jump() {
+        let mut smoother = RawSignalSmoother::default();
+        smoother.smooth(1000, 0.2);
+        // A big jump only moves the smoothed value by `alpha` of the way there.
+        let smoothed = smoother.smooth(2000, 0.2);
+        assert_eq!(smoothed, 1200);
+        assert!(smoothed < 2000);
+    }
+
+    #[test]
+    fn smoother_converges_on_a_steady_input() {
+        let mut smoother = RawSignalSmoother::default();
+        let mut last = 0;
+        for _ in 0..200 {
+            last = smoother.smooth(5000, 0.2);
+        }
+        assert_eq!(last, 5000);
     }
 }

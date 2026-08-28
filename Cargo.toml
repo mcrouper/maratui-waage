@@ -11,6 +11,10 @@ device = ["dep:esp-idf-svc", "dep:ili9341", "dep:display-interface-spi", "dep:em
 simulator = ["dep:embedded-graphics-simulator", "dep:rumqttc"]
 # Publish HA MQTT Discovery configs and state directly from firmware (no Node-RED needed)
 home-assistant = []
+# Test variant for bring-up with only the display + dual HX711 scale wired up, no Lelit Mara
+# UART connection: shows raw (uncalibrated, untared) left/right/sum ADC counts in the Weight
+# field instead of the normal calibrated net weight. See docs/hardware.md.
+scale-test = []
 
 [dependencies]
 anyhow = "1.0.100"

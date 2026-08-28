@@ -2,6 +2,8 @@ use crate::app::MaraUiApp;
 use crate::button::{Button, ButtonState};
 use crate::config::AppConfig;
 use crate::hx711::Hx711;
+#[cfg(feature = "scale-test")]
+use crate::scale::RawSignalSmoother;
 use crate::scale::{
     CALIBRATION_REFERENCE_G, DualScaleCalibration, ScaleCalibration, ScaleReadingFilter,
 };
@@ -101,7 +103,8 @@ fn run_app_hardware(mut app: impl MaraUiApp) {
     let button1_pin = peripherals.pins.gpio12;
     let hx711_dout_left = peripherals.pins.gpio25;
     let hx711_dout_right = peripherals.pins.gpio32;
-    let hx711_sck = peripherals.pins.gpio26;
+    let hx711_sck_left = peripherals.pins.gpio26;
+    let hx711_sck_right = peripherals.pins.gpio27;
 
     let mut display =
         get_ili9341(spi_p, dc, mosi, sclk, cs, rst).expect("Failed to initialize display");
@@ -133,10 +136,20 @@ fn run_app_hardware(mut app: impl MaraUiApp) {
         .clone()
         .and_then(|p| EspNvs::new(p, "scale", true).ok());
     let mut calibration = load_calibration(scale_nvs.as_ref());
-    let mut hx711 = Hx711::new(hx711_dout_left, hx711_dout_right, hx711_sck)
-        .expect("Failed to initialize HX711");
+    let mut hx711 = Hx711::new(
+        hx711_dout_left,
+        hx711_dout_right,
+        hx711_sck_left,
+        hx711_sck_right,
+    )
+    .expect("Failed to initialize HX711");
     let mut left_filter = ScaleReadingFilter::default();
     let mut right_filter = ScaleReadingFilter::default();
+    #[cfg(feature = "scale-test")]
+    let (mut left_raw_smoother, mut right_raw_smoother) =
+        (RawSignalSmoother::default(), RawSignalSmoother::default());
+    #[cfg(feature = "scale-test")]
+    const RAW_SMOOTHING_ALPHA: f32 = 0.2;
 
     // ── WiFi ────────────────────────────────────────────────────────────────
     app.handle_event(AppEvent::WifiStatusChanged(ConnectionStatus::Connecting));
@@ -239,16 +252,25 @@ fn run_app_hardware(mut app: impl MaraUiApp) {
 
         // Non-blocking scale sample: read both HX711s independently and sum the calibrated
         // weights so the Dashboard shows the total load on both cells.
-        let left_weight = if hx711.is_left_ready() {
-            hx711.read_left_raw().and_then(|raw| left_filter.accept(raw, calibration.left))
-        } else {
-            None
-        };
-        let right_weight = if hx711.is_right_ready() {
-            hx711.read_right_raw().and_then(|raw| right_filter.accept(raw, calibration.right))
-        } else {
-            None
-        };
+        let left_raw = if hx711.is_left_ready() { hx711.read_left_raw() } else { None };
+        let right_raw = if hx711.is_right_ready() { hx711.read_right_raw() } else { None };
+
+        #[cfg(feature = "scale-test")]
+        if left_raw.is_some() || right_raw.is_some() {
+            // Damp with an EMA so the on-screen readout doesn't jump around on raw ADC noise
+            // (there's no calibration yet to run the normal step-size filter against).
+            let left_smoothed =
+                left_raw.map(|raw| left_raw_smoother.smooth(raw, RAW_SMOOTHING_ALPHA));
+            let right_smoothed =
+                right_raw.map(|raw| right_raw_smoother.smooth(raw, RAW_SMOOTHING_ALPHA));
+            app.handle_event(AppEvent::RawWeightUpdated {
+                left: left_smoothed,
+                right: right_smoothed,
+            });
+        }
+
+        let left_weight = left_raw.and_then(|raw| left_filter.accept(raw, calibration.left));
+        let right_weight = right_raw.and_then(|raw| right_filter.accept(raw, calibration.right));
         let total_weight_dg = left_weight.unwrap_or(0) + right_weight.unwrap_or(0);
         if left_weight.is_some() || right_weight.is_some() {
             app.handle_event(AppEvent::WeightUpdated { weight_dg: total_weight_dg });

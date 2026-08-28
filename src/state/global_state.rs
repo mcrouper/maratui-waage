@@ -185,6 +185,12 @@ pub struct GlobalAppState {
     pub calibration_step: Option<CalibrationStep>,
     /// Screen to return to once calibration finishes or is cancelled.
     pub screen_before_calibration: Option<Screen>,
+    /// Latest raw (uncalibrated) HX711 ADC count from the left cell. Only populated by the
+    /// `scale-test` build variant, which bypasses calibration entirely.
+    pub raw_weight_left: Option<i32>,
+    /// Latest raw (uncalibrated) HX711 ADC count from the right cell. Only populated by the
+    /// `scale-test` build variant.
+    pub raw_weight_right: Option<i32>,
 }
 
 impl Default for GlobalAppState {
@@ -214,6 +220,8 @@ impl Default for GlobalAppState {
             scale_tare_dg: 0,
             calibration_step: None,
             screen_before_calibration: None,
+            raw_weight_left: None,
+            raw_weight_right: None,
         }
     }
 }

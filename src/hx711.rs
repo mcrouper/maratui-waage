@@ -3,27 +3,39 @@
 //! Protocol: `SCK` idles low. Once `DOUT` goes low, a conversion is ready; 24 clock
 //! pulses shift out the result MSB-first, and one extra ("25th") pulse selects gain 128 /
 //! channel A for the next conversion (the default and only mode used here).
+//!
+//! Each HX711 has its own `SCK` line (not shared) so the two ADCs can be clocked and read
+//! fully independently.
 
 use esp_idf_svc::hal::delay::Ets;
-use esp_idf_svc::hal::gpio::{Gpio25, Gpio26, Gpio32, Input, Output, PinDriver};
+use esp_idf_svc::hal::gpio::{Gpio25, Gpio26, Gpio27, Gpio32, Input, Output, PinDriver};
 use std::time::{Duration, Instant};
 
 pub struct Hx711<'d> {
     dout_left: PinDriver<'d, Gpio25, Input>,
     dout_right: PinDriver<'d, Gpio32, Input>,
-    sck: PinDriver<'d, Gpio26, Output>,
+    sck_left: PinDriver<'d, Gpio26, Output>,
+    sck_right: PinDriver<'d, Gpio27, Output>,
 }
 
 impl<'d> Hx711<'d> {
-    pub fn new(dout_left: Gpio25, dout_right: Gpio32, sck: Gpio26) -> anyhow::Result<Self> {
-        let mut sck = PinDriver::output(sck)?;
+    pub fn new(
+        dout_left: Gpio25,
+        dout_right: Gpio32,
+        sck_left: Gpio26,
+        sck_right: Gpio27,
+    ) -> anyhow::Result<Self> {
+        let mut sck_left = PinDriver::output(sck_left)?;
+        let mut sck_right = PinDriver::output(sck_right)?;
         let dout_left = PinDriver::input(dout_left)?;
         let dout_right = PinDriver::input(dout_right)?;
-        sck.set_low()?;
+        sck_left.set_low()?;
+        sck_right.set_low()?;
         Ok(Self {
             dout_left,
             dout_right,
-            sck,
+            sck_left,
+            sck_right,
         })
     }
 
@@ -45,15 +57,15 @@ impl<'d> Hx711<'d> {
 
         let mut value: u32 = 0;
         for _ in 0..24 {
-            self.sck.set_high().ok()?;
+            self.sck_left.set_high().ok()?;
             Ets::delay_us(1);
             value = (value << 1) | u32::from(self.dout_left.is_high());
-            self.sck.set_low().ok()?;
+            self.sck_left.set_low().ok()?;
             Ets::delay_us(1);
         }
-        self.sck.set_high().ok()?;
+        self.sck_left.set_high().ok()?;
         Ets::delay_us(1);
-        self.sck.set_low().ok()?;
+        self.sck_left.set_low().ok()?;
         Ets::delay_us(1);
 
         if value & 0x0080_0000 != 0 {
@@ -70,15 +82,15 @@ impl<'d> Hx711<'d> {
 
         let mut value: u32 = 0;
         for _ in 0..24 {
-            self.sck.set_high().ok()?;
+            self.sck_right.set_high().ok()?;
             Ets::delay_us(1);
             value = (value << 1) | u32::from(self.dout_right.is_high());
-            self.sck.set_low().ok()?;
+            self.sck_right.set_low().ok()?;
             Ets::delay_us(1);
         }
-        self.sck.set_high().ok()?;
+        self.sck_right.set_high().ok()?;
         Ets::delay_us(1);
-        self.sck.set_low().ok()?;
+        self.sck_right.set_low().ok()?;
         Ets::delay_us(1);
 
         if value & 0x0080_0000 != 0 {

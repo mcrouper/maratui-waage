@@ -77,7 +77,7 @@ The public interface all platform setups call. `MaraUi` is the concrete implemen
 Each screen is a zero-size struct implementing the `Board` trait (`fn render(state, area, frame)`). Screen rotation (Button1 short = next, Button2 short = previous) wraps through `[Main, Dashboard, Graphs]`; the `Debug` screen is only reachable via Button1+Button2 simultaneously. `CalibrationWizard` is not part of the rotation — it overlays whatever screen is active whenever `GlobalAppState::calibration_step` is `Some`.
 
 ### Scale (`src/hx711.rs`, `src/scale.rs`)
-- `hx711.rs` (device only) bit-bangs the HX711 protocol on GPIO25 (DOUT) / GPIO26 (SCK), gain 128 / channel A.
+- `hx711.rs` (device only) bit-bangs the HX711 protocol for two independent load cells, each with its own DOUT/SCK pair (left: GPIO25/GPIO26, right: GPIO32/GPIO27), gain 128 / channel A. See `docs/hardware.md` for the full pin mapping.
 - `scale.rs` is hardware-agnostic calibration math (`ScaleCalibration { offset, scale }`) plus NVS byte (de)serialization, reused by both the device driver and tests.
 - Calibration is triggered by holding Button1 for 3s, which starts the `CalibrationWizard` (see `GlobalAppState::calibration_step` / `CalibrationStep`). The device loop (`setup.rs`) performs the actual blocking HX711 reads for the `Taring`/`Calibrating` steps and reports back via `AppEvent::CalibrationStepResult`; calibration persists to NVS under the `"scale"` namespace.
 - The Dashboard shows live weight (`GlobalAppState::weight_dg`, in decigrams) and auto-tares the moment a shot starts (`AppEvent::ShotStarted`) so it displays net extracted weight.

@@ -170,6 +170,11 @@ impl AppStateMachine {
                 state.weight_dg = Some(weight_dg - state.scale_tare_dg);
             }
 
+            AppEvent::RawWeightUpdated { left, right } => {
+                state.raw_weight_left = left;
+                state.raw_weight_right = right;
+            }
+
             AppEvent::StartCalibration => {
                 if state.calibration_step.is_none() {
                     state.screen_before_calibration = Some(state.current_screen);
