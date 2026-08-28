@@ -74,7 +74,13 @@ The public interface all platform setups call. `MaraUi` is the concrete implemen
 - `MachineState` holds rolling `VecDeque<f64>` buffers (capped at 300 points each, pushed in triples) for the three temperature series shown in the Graphs screen.
 
 ### Screens (`src/screens/`)
-Each screen is a zero-size struct implementing the `Board` trait (`fn render(state, area, frame)`). Screen rotation (Button1 short = next, Button2 short = previous) wraps through `[Main, Dashboard, Graphs]`; the `Debug` screen is only reachable via Button1+Button2 simultaneously.
+Each screen is a zero-size struct implementing the `Board` trait (`fn render(state, area, frame)`). Screen rotation (Button1 short = next, Button2 short = previous) wraps through `[Main, Dashboard, Graphs]`; the `Debug` screen is only reachable via Button1+Button2 simultaneously. `CalibrationWizard` is not part of the rotation — it overlays whatever screen is active whenever `GlobalAppState::calibration_step` is `Some`.
+
+### Scale (`src/hx711.rs`, `src/scale.rs`)
+- `hx711.rs` (device only) bit-bangs the HX711 protocol on GPIO25 (DOUT) / GPIO26 (SCK), gain 128 / channel A.
+- `scale.rs` is hardware-agnostic calibration math (`ScaleCalibration { offset, scale }`) plus NVS byte (de)serialization, reused by both the device driver and tests.
+- Calibration is triggered by holding Button1 for 3s, which starts the `CalibrationWizard` (see `GlobalAppState::calibration_step` / `CalibrationStep`). The device loop (`setup.rs`) performs the actual blocking HX711 reads for the `Taring`/`Calibrating` steps and reports back via `AppEvent::CalibrationStepResult`; calibration persists to NVS under the `"scale"` namespace.
+- The Dashboard shows live weight (`GlobalAppState::weight_dg`, in decigrams) and auto-tares the moment a shot starts (`AppEvent::ShotStarted`) so it displays net extracted weight.
 
 ### Assets (`assets/`)
 Raw RGB565 image files are `include_bytes!`-embedded at compile time. To regenerate from PNG:
@@ -89,10 +95,11 @@ ffmpeg -f lavfi -i color=black:s=180x180 -i rat_barista.png \
 |-----|--------|
 | Right / Left arrow | Button1 short (toggle Dashboard ↔ Graphs) |
 | D | Button1 long (toggle Debug screen) |
-| Up | Inject pump-on debug frame |
-| Down | Inject normal debug frame |
-| Space | Inject no-water debug frame |
+| Up | Inject pump-on debug frame (also starts simulated scale weight rising) |
+| Down | Inject normal debug frame (stops simulated scale weight) |
+| Space | Inject no-water debug frame (stops simulated scale weight) |
 | M | Publish manual MQTT event |
+| C | Start the scale calibration wizard (real hardware needs a 3s Button1 hold instead) |
 
 ---
 

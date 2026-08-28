@@ -67,6 +67,26 @@ pub enum AppEvent {
 
     /// Boot initialization complete — switches connecting screen to "waiting for machine"
     LoadingComplete,
+
+    /// Show the dashboard after standalone startup even when no Mara UART frame arrived.
+    EnterOfflineMode,
+
+    /// New scale reading from the HX711, in decigrams (0.1g), already calibration-adjusted
+    /// (raw counts converted via `ScaleCalibration`) but not yet session-tared.
+    WeightUpdated { weight_dg: i32 },
+
+    /// Start the on-screen scale calibration wizard (triggered by a 3s Button1 hold).
+    StartCalibration,
+
+    /// User confirmed the current calibration wizard step with a short press.
+    CalibrationConfirm,
+
+    /// User cancelled the calibration wizard with a long press.
+    CalibrationCancel,
+
+    /// Device loop finished the blocking HX711 read for the current transient step
+    /// (Taring or Calibrating) and reports whether it succeeded.
+    CalibrationStepResult { success: bool },
 }
 
 impl AppEvent {
@@ -150,6 +170,16 @@ impl std::fmt::Display for AppEvent {
                 write!(f, "Loading [{progress}%]: {message}")
             }
             AppEvent::LoadingComplete => write!(f, "Loading complete"),
+            AppEvent::EnterOfflineMode => write!(f, "Enter offline mode"),
+            AppEvent::WeightUpdated { weight_dg } => {
+                write!(f, "Weight updated: {:.1}g", *weight_dg as f32 / 10.0)
+            }
+            AppEvent::StartCalibration => write!(f, "Start Calibration"),
+            AppEvent::CalibrationConfirm => write!(f, "Calibration Confirm"),
+            AppEvent::CalibrationCancel => write!(f, "Calibration Cancel"),
+            AppEvent::CalibrationStepResult { success } => {
+                write!(f, "Calibration Step Result: success={}", success)
+            }
         }
     }
 }

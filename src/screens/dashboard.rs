@@ -26,6 +26,7 @@ const HX_SCALE_MIN: f64 = 60.0;
 const HX_SCALE_MAX: f64 = 110.0;
 const HX_IDEAL_LOW: f64 = 90.0;
 const HX_IDEAL_HIGH: f64 = 95.0;
+const VALUE_PIXEL_SIZE: PixelSize = PixelSize::Quadrant;
 
 #[derive(Default)]
 pub struct Dashboard;
@@ -312,7 +313,6 @@ fn render_shot_gauge(state: &GlobalAppState, area: Rect, buf: &mut Buffer) {
 }
 
 fn render_timer(state: &GlobalAppState, area: Rect, frame: &mut Frame) {
-    let buf = frame.buffer_mut();
     let extraction_secs = current_extraction_secs(state);
 
     let timer_style = if state.extraction_state.is_extracting() {
@@ -323,8 +323,27 @@ fn render_timer(state: &GlobalAppState, area: Rect, frame: &mut Frame) {
         STYLE_DARK_GRAY
     };
 
+    // Split the column in half: timer on the left, weight on the right, each labeled on top.
+    let [timer_area, weight_area] =
+        Layout::horizontal(Constraint::from_fills([1, 1])).areas(area);
+    let timer_display = centered_half_height(timer_inner_area(timer_area));
+    let timer_glyph_bottom = timer_display.top() + 4;
+
+    render_timer_half(timer_area, frame, extraction_secs, timer_style, state);
+    render_weight_half(weight_area, frame, state, timer_glyph_bottom, timer_display.height);
+}
+
+fn render_timer_half(
+    area: Rect,
+    frame: &mut Frame,
+    extraction_secs: u64,
+    timer_style: Style,
+    state: &GlobalAppState,
+) {
+    let buf = frame.buffer_mut();
+
     let timer_block = Block::bordered()
-        .title_bottom("Extraction")
+        .title("Timer")
         .title_alignment(ratatui::layout::HorizontalAlignment::Center)
         .border_type(BorderType::Rounded)
         .border_style(STYLE_YELLOW)
@@ -332,15 +351,16 @@ fn render_timer(state: &GlobalAppState, area: Rect, frame: &mut Frame) {
 
     let timer_inner = timer_block.inner(area);
     timer_block.render(area, buf);
+    let display_area = centered_half_height(timer_inner);
 
     let big_text = BigText::builder()
-        .pixel_size(PixelSize::Full)
+        .pixel_size(VALUE_PIXEL_SIZE)
         .centered()
         .lines(vec![extraction_secs.to_string().into()])
         .style(timer_style)
         .build();
 
-    frame.render_widget(big_text, timer_inner);
+    frame.render_widget(big_text, display_area);
 
     // Post-shot assessment label pinned to the bottom of the block
     if !state.extraction_state.is_extracting()
@@ -357,6 +377,72 @@ fn render_timer(state: &GlobalAppState, area: Rect, frame: &mut Frame) {
             .centered()
             .style(timer_style)
             .render(label_area, buf);
+    }
+}
+
+fn render_weight_half(
+    area: Rect,
+    frame: &mut Frame,
+    state: &GlobalAppState,
+    display_bottom: u16,
+    display_height: u16,
+) {
+    let buf = frame.buffer_mut();
+
+    let weight_block = Block::bordered()
+        .title("Weight")
+        .title_alignment(ratatui::layout::HorizontalAlignment::Center)
+        .border_type(BorderType::Rounded)
+        .border_style(STYLE_YELLOW)
+        .padding(Padding::top(1));
+
+    let weight_inner = weight_block.inner(area);
+    weight_block.render(area, buf);
+    let display_area = aligned_weight_area(weight_inner, display_bottom, display_height);
+
+    let (text, style) = match state.weight_dg {
+        Some(dg) => (format!("{}", dg / 10), STYLE_WHITE),
+        None => ("--".to_string(), STYLE_DARK_GRAY),
+    };
+
+    let big_text = BigText::builder()
+        .pixel_size(VALUE_PIXEL_SIZE)
+        .centered()
+        .lines(vec![text.into()])
+        .style(style)
+        .build();
+
+    frame.render_widget(big_text, display_area);
+}
+
+fn timer_inner_area(area: Rect) -> Rect {
+    Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(STYLE_YELLOW)
+        .padding(Padding::top(1))
+        .inner(area)
+}
+
+fn aligned_weight_area(area: Rect, display_bottom: u16, display_height: u16) -> Rect {
+    let height = area.height.min(display_height);
+    Rect {
+        x: area.x,
+        y: display_bottom
+            .saturating_sub(height)
+            .saturating_add(1)
+            .min(area.bottom().saturating_sub(height)),
+        width: area.width,
+        height,
+    }
+}
+
+fn centered_half_height(area: Rect) -> Rect {
+    let height = (area.height / 2).max(1);
+    Rect {
+        x: area.x,
+        y: area.y + (area.height.saturating_sub(height) / 2),
+        width: area.width,
+        height,
     }
 }
 
