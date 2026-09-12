@@ -5,7 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Padding, Paragraph, Widget};
+use ratatui::widgets::{Block, BorderType, Paragraph, Widget};
 use tui_widgets::big_text::{BigText, PixelSize};
 
 use crate::screens::screen::Board;
@@ -21,12 +21,13 @@ const STYLE_WHITE: Style = Style::new().fg(Color::White);
 const STYLE_YELLOW: Style = Style::new().fg(Color::Yellow);
 
 const BOILER_SCALE_MAX: u16 = 160;
-const SHOT_GAUGE_MAX_SECS: u64 = 30;
+// Shot gauge ("%") tracks extracted weight, not elapsed time: 40g (400 decigrams) == 100%.
+const WEIGHT_GAUGE_MAX_DG: i32 = 400;
+const VALUE_PIXEL_SIZE: PixelSize = PixelSize::Quadrant;
 const HX_SCALE_MIN: f64 = 60.0;
 const HX_SCALE_MAX: f64 = 110.0;
 const HX_IDEAL_LOW: f64 = 90.0;
 const HX_IDEAL_HIGH: f64 = 95.0;
-const VALUE_PIXEL_SIZE: PixelSize = PixelSize::Quadrant;
 
 #[derive(Default)]
 pub struct Dashboard;
@@ -318,7 +319,8 @@ fn render_shot_gauge(state: &GlobalAppState, area: Rect, buf: &mut Buffer) {
     }
 
     let total = inner.height as usize;
-    let ratio = (extraction_secs as f64 / SHOT_GAUGE_MAX_SECS as f64).min(1.0);
+    let weight_dg = state.weight_dg.unwrap_or(0).max(0);
+    let ratio = (weight_dg as f64 / WEIGHT_GAUGE_MAX_DG as f64).min(1.0);
     let filled = (ratio * total as f64).round() as usize;
     let fill_style = shot_style(extraction_secs, state.extraction_state.is_extracting());
     let fill: String = "█".repeat(inner.width as usize);
@@ -346,14 +348,12 @@ fn render_timer(state: &GlobalAppState, area: Rect, frame: &mut Frame) {
         STYLE_DARK_GRAY
     };
 
-    // Split the column in half: timer on the left, weight on the right, each labeled on top.
+    // Split the column in half: timer on top, weight below, each labeled on top.
     let [timer_area, weight_area] =
-        Layout::horizontal(Constraint::from_fills([1, 1])).areas(area);
-    let timer_display = centered_half_height(timer_inner_area(timer_area));
-    let timer_glyph_bottom = timer_display.top() + 4;
+        Layout::vertical(Constraint::from_fills([1, 1])).areas(area);
 
     render_timer_half(timer_area, frame, extraction_secs, timer_style, state);
-    render_weight_half(weight_area, frame, state, timer_glyph_bottom, timer_display.height);
+    render_weight_half(weight_area, frame, state);
 }
 
 fn render_timer_half(
@@ -365,16 +365,21 @@ fn render_timer_half(
 ) {
     let buf = frame.buffer_mut();
 
+    // No top padding: the vertical Timer/Weight stack leaves only ~6 rows per half, and a
+    // `Quadrant` glyph needs all 4 of the ~4 left after the border — padding ate the row the
+    // glyph needed, clipping its bottom row.
     let timer_block = Block::bordered()
         .title("Timer")
         .title_alignment(ratatui::layout::HorizontalAlignment::Center)
         .border_type(BorderType::Rounded)
-        .border_style(STYLE_YELLOW)
-        .padding(Padding::top(1));
+        .border_style(STYLE_YELLOW);
 
     let timer_inner = timer_block.inner(area);
     timer_block.render(area, buf);
-    let display_area = centered_half_height(timer_inner);
+    let mut display_area = centered_fixed_height(timer_inner, BIG_TEXT_GLYPH_ROWS);
+    // Nudge the timer digits down 1px, only if there's a spare row below to move into.
+    let shift = 1u16.min(timer_inner.bottom().saturating_sub(display_area.bottom()));
+    display_area.y += shift;
 
     let big_text = BigText::builder()
         .pixel_size(VALUE_PIXEL_SIZE)
@@ -403,28 +408,28 @@ fn render_timer_half(
     }
 }
 
-fn render_weight_half(
-    area: Rect,
-    frame: &mut Frame,
-    state: &GlobalAppState,
-    display_bottom: u16,
-    display_height: u16,
-) {
+fn render_weight_half(area: Rect, frame: &mut Frame, state: &GlobalAppState) {
     let buf = frame.buffer_mut();
 
     let weight_block = Block::bordered()
         .title("Weight")
         .title_alignment(ratatui::layout::HorizontalAlignment::Center)
         .border_type(BorderType::Rounded)
-        .border_style(STYLE_YELLOW)
-        .padding(Padding::top(1));
+        .border_style(STYLE_YELLOW);
 
     let weight_inner = weight_block.inner(area);
     weight_block.render(area, buf);
-    let display_area = aligned_weight_area(weight_inner, display_bottom, display_height);
+    let mut display_area = centered_fixed_height(weight_inner, BIG_TEXT_GLYPH_ROWS);
+    // Nudge the weight digits up 2px from their centered position — grow the height by the same
+    // amount so the *bottom* edge doesn't move too, which would clip the glyphs' bottom rows
+    // (where the decimal comma's descender lives).
+    let shift = 2u16.min(display_area.y.saturating_sub(weight_inner.y));
+    display_area.y -= shift;
+    display_area.height += shift;
 
     let (text, style) = match state.weight_dg {
-        Some(dg) => (format!("{}", dg / 10), STYLE_WHITE),
+        // German decimal comma, not a period.
+        Some(dg) => (format!("{:.1}", dg as f64 / 10.0).replace('.', ","), STYLE_WHITE),
         None => ("--".to_string(), STYLE_DARK_GRAY),
     };
 
@@ -481,29 +486,15 @@ fn render_raw_weight(state: &GlobalAppState, area: Rect, frame: &mut Frame) {
     frame.render_widget(big_text, digits_area);
 }
 
-fn timer_inner_area(area: Rect) -> Rect {
-    Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(STYLE_YELLOW)
-        .padding(Padding::top(1))
-        .inner(area)
-}
+// Height (in terminal rows) of a single-line `BigText` glyph at `VALUE_PIXEL_SIZE`: the 8x8
+// font compressed by `Quadrant`'s (2,2) packing is 8/2 = 4 rows tall.
+const BIG_TEXT_GLYPH_ROWS: u16 = 4;
 
-fn aligned_weight_area(area: Rect, display_bottom: u16, display_height: u16) -> Rect {
-    let height = area.height.min(display_height);
-    Rect {
-        x: area.x,
-        y: display_bottom
-            .saturating_sub(height)
-            .saturating_add(1)
-            .min(area.bottom().saturating_sub(height)),
-        width: area.width,
-        height,
-    }
-}
-
-fn centered_half_height(area: Rect) -> Rect {
-    let height = (area.height / 2).max(1);
+/// Vertically centers exactly `content_height` rows within `area` — clamped to `area`'s own
+/// height so it never asks for more space than is actually there (which would clip the glyph
+/// instead of just using less blank margin around it).
+fn centered_fixed_height(area: Rect, content_height: u16) -> Rect {
+    let height = content_height.min(area.height).max(1);
     Rect {
         x: area.x,
         y: area.y + (area.height.saturating_sub(height) / 2),

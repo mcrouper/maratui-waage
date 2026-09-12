@@ -225,6 +225,14 @@ fn run_app_hardware(mut app: impl MaraUiApp) {
     let mut last_wifi_check_at: Option<Instant> = None;
     let mut wifi_reconnect_at: Option<Instant> = None;
     let mut wifi_was_connected = true;
+    // The two HX711s run on independent, unsynchronized conversion cycles, so they're almost
+    // never "ready" on the same loop iteration. Track each cell's latest known reading here so
+    // the combined total always reflects both cells, rather than treating whichever cell isn't
+    // ready *this exact tick* as if it were reading 0.
+    let mut last_left_weight_dg: Option<i32> = None;
+    let mut last_right_weight_dg: Option<i32> = None;
+    // TEMPORARY: verifying the trimmed-mean scale filter over serial — remove once confirmed.
+    let mut last_logged_weight_dg: Option<i32> = None;
 
     loop {
         app.tick();
@@ -251,7 +259,10 @@ fn run_app_hardware(mut app: impl MaraUiApp) {
         }
 
         // Non-blocking scale sample: read both HX711s independently and sum the calibrated
-        // weights so the Dashboard shows the total load on both cells.
+        // weights so the Dashboard shows the total load on both cells. Read as often as the
+        // HX711 has new data (its own conversion rate paces this, not the loop) — the rolling
+        // trimmed-mean window in `ScaleReadingFilter` does the smoothing, so there's no need to
+        // artificially space samples out in time.
         let left_raw = if hx711.is_left_ready() { hx711.read_left_raw() } else { None };
         let right_raw = if hx711.is_right_ready() { hx711.read_right_raw() } else { None };
 
@@ -271,8 +282,23 @@ fn run_app_hardware(mut app: impl MaraUiApp) {
 
         let left_weight = left_raw.and_then(|raw| left_filter.accept(raw, calibration.left));
         let right_weight = right_raw.and_then(|raw| right_filter.accept(raw, calibration.right));
-        let total_weight_dg = left_weight.unwrap_or(0) + right_weight.unwrap_or(0);
+        if let Some(w) = left_weight {
+            last_left_weight_dg = Some(w);
+        }
+        if let Some(w) = right_weight {
+            last_right_weight_dg = Some(w);
+        }
+        let total_weight_dg = last_left_weight_dg.unwrap_or(0) + last_right_weight_dg.unwrap_or(0);
         if left_weight.is_some() || right_weight.is_some() {
+            if last_logged_weight_dg != Some(total_weight_dg) {
+                info!(
+                    "Scale: {:.1}g (left={:?}dg right={:?}dg)",
+                    total_weight_dg as f32 / 10.0,
+                    last_left_weight_dg,
+                    last_right_weight_dg
+                );
+                last_logged_weight_dg = Some(total_weight_dg);
+            }
             app.handle_event(AppEvent::WeightUpdated { weight_dg: total_weight_dg });
         }
 
@@ -502,24 +528,47 @@ fn query_free_heap() -> u32 {
     unsafe { esp_idf_svc::sys::esp_get_free_heap_size() }
 }
 
-/// Load a persisted dual-scale calibration from NVS, falling back to the uncalibrated default
-/// if none was ever saved or NVS is unavailable.
+// TEMPORARY wiring sanity-check values — NOT a real calibration. `offset` is each cell's
+// actual empty-scale raw reading, measured live over serial (left ≈ -206,400, right ≈
+// -431,000 — the two cells are nowhere near each other, so they need separate offsets).
+// `scale` is still a rough ballpark (counts/gram) for a small HX711 module at gain 128, so
+// displayed grams are still wrong — but readings now correctly return to ~0g when the scale
+// is empty instead of getting stuck (an all-zero offset put the "empty" reading outside the
+// plausible-weight sanity range, so it was silently rejected and the last loaded reading
+// never got overwritten). Run the real calibration wizard (hold Button1 3s) and remove this
+// fallback once the cells are confirmed working.
+const ASSUMED_CALIBRATION_LEFT: ScaleCalibration = ScaleCalibration {
+    offset: -206_400,
+    scale: 400.0,
+};
+const ASSUMED_CALIBRATION_RIGHT: ScaleCalibration = ScaleCalibration {
+    offset: -431_000,
+    scale: 400.0,
+};
+
+/// Load a persisted dual-scale calibration from NVS, falling back to `ASSUMED_CALIBRATION_*`
+/// (see above) if none was ever saved or NVS is unavailable.
 fn load_calibration(nvs: Option<&EspNvs<NvsDefault>>) -> DualScaleCalibration {
+    let assumed = DualScaleCalibration {
+        left: ASSUMED_CALIBRATION_LEFT,
+        right: ASSUMED_CALIBRATION_RIGHT,
+    };
+
     let Some(nvs) = nvs else {
-        warn!("NVS unavailable — dual scale will use uncalibrated defaults");
-        return DualScaleCalibration::default();
+        warn!("NVS unavailable — dual scale will use ASSUMED_CALIBRATION (wiring check only)");
+        return assumed;
     };
 
     let mut buf = [0u8; 16];
     match nvs.get_raw("scale", &mut buf) {
         Ok(Some(_)) => DualScaleCalibration::from_bytes(buf),
         Ok(None) => {
-            info!("No stored dual-scale calibration found, using uncalibrated defaults");
-            DualScaleCalibration::default()
+            info!("No stored dual-scale calibration found, using ASSUMED_CALIBRATION (wiring check only)");
+            assumed
         }
         Err(e) => {
             warn!("Failed to read stored dual-scale calibration: {:?}", e);
-            DualScaleCalibration::default()
+            assumed
         }
     }
 }

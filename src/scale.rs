@@ -7,7 +7,6 @@
 pub const CALIBRATION_REFERENCE_G: f32 = 500.0;
 const MIN_WEIGHT_DG: i32 = -500;
 const MAX_WEIGHT_DG: i32 = 30_000;
-const MAX_STEP_DG: i32 = 2_500;
 
 /// Converts raw HX711 ADC counts into grams.
 ///
@@ -108,14 +107,31 @@ impl DualScaleCalibration {
     }
 }
 
-/// Filters disconnected, corrupt, and implausibly jumping HX711 samples.
+// Rolling-window trimmed-mean parameters, matching the `HX711_ADC` Arduino library's proven
+// defaults (as used by e.g. the CleverCoffee espresso-PID firmware): average the last
+// `WINDOW_SAMPLES` raw readings, but drop the highest `TRIM_HIGH` and lowest `TRIM_LOW` of
+// them first so a single spike doesn't skew the result.
+//
+// Deliberately NOT a step-limiting filter (reject-if-too-different-from-last-accepted-value):
+// that design can get permanently stuck — once a real, fast change (weight added/removed) gets
+// rejected as "implausible", every later sample is still compared against the same stale
+// reference and rejected too, so the old value never updates. A rolling window has no such
+// failure mode: it always reflects the most recent samples, converging on a real change within
+// one window's worth of readings instead of staying stuck indefinitely.
+const WINDOW_SAMPLES: usize = 32;
+const TRIM_HIGH: usize = 1;
+const TRIM_LOW: usize = 1;
+
+/// Smooths HX711 samples with a rolling trimmed-mean window and rejects disconnected, corrupt,
+/// or wildly out-of-range readings before they ever enter the window.
 #[derive(Debug, Default)]
 pub struct ScaleReadingFilter {
-    last_raw: Option<i32>,
+    window: std::collections::VecDeque<i32>,
 }
 
 impl ScaleReadingFilter {
-    /// Accept a raw sample and return calibrated decigrams, or ignore the sample.
+    /// Accept a raw sample and return the trimmed-mean calibrated decigrams, or ignore the
+    /// sample entirely if it's out of range (before it can pollute the window).
     pub fn accept(&mut self, raw: i32, calibration: ScaleCalibration) -> Option<i32> {
         if !(-8_388_608..=8_388_607).contains(&raw) || !calibration.is_valid() {
             return None;
@@ -126,15 +142,23 @@ impl ScaleReadingFilter {
             return None;
         }
 
-        if let Some(last_raw) = self.last_raw {
-            let max_raw_step = (calibration.scale.abs() * MAX_STEP_DG as f32 / 10.0) as i32;
-            if (i64::from(raw) - i64::from(last_raw)).abs() > i64::from(max_raw_step.max(1)) {
-                return None;
-            }
+        self.window.push_back(raw);
+        if self.window.len() > WINDOW_SAMPLES {
+            self.window.pop_front();
         }
 
-        self.last_raw = Some(raw);
-        Some(weight_dg)
+        let mut sorted: Vec<i32> = self.window.iter().copied().collect();
+        sorted.sort_unstable();
+        let (lo, hi) = if sorted.len() > TRIM_LOW + TRIM_HIGH {
+            (TRIM_LOW, sorted.len() - TRIM_HIGH)
+        } else {
+            (0, sorted.len())
+        };
+        let trimmed = &sorted[lo..hi];
+        let sum: i64 = trimmed.iter().map(|&v| i64::from(v)).sum();
+        let mean_raw = (sum as f64 / trimmed.len() as f64).round() as i32;
+
+        Some(calibration.raw_to_decigrams(mean_raw))
     }
 }
 
@@ -252,15 +276,61 @@ mod tests {
         assert_eq!(filter.accept(1000 + 20 * 4000, calibration), None);
     }
 
+    /// A single spike (e.g. one bad HX711 sample) is trimmed out of the window and barely
+    /// moves the result, instead of being rejected-and-then-stuck like the old step filter.
     #[test]
-    fn filter_ignores_large_jumps() {
+    fn filter_trims_a_single_spike() {
         let mut filter = ScaleReadingFilter::default();
         let calibration = ScaleCalibration {
             offset: 1000,
             scale: 20.0,
         };
-        assert_eq!(filter.accept(1000, calibration), Some(0));
-        assert_eq!(filter.accept(1000 + 20 * 300, calibration), None);
+        for _ in 0..5 {
+            filter.accept(1000, calibration);
+        }
+        // One wild outlier: gets trimmed as the window's single highest sample, so it has no
+        // effect on the output at all.
+        assert_eq!(filter.accept(1000 + 20 * 300, calibration), Some(0));
+    }
+
+    /// A sustained real change (e.g. lifting the cup off the scale) must fully take over the
+    /// window, unlike the old step filter which could reject it forever.
+    #[test]
+    fn filter_converges_on_a_sustained_change() {
+        let mut filter = ScaleReadingFilter::default();
+        let calibration = ScaleCalibration {
+            offset: 1000,
+            scale: 20.0,
+        };
+        for _ in 0..WINDOW_SAMPLES {
+            filter.accept(1000, calibration);
+        }
+
+        let new_raw = 1000 + 20 * 300; // a large, real change
+        let mut last = None;
+        for _ in 0..WINDOW_SAMPLES {
+            last = filter.accept(new_raw, calibration);
+        }
+        // Once the old samples have fully aged out of the window, the reading matches the new
+        // value exactly — it's not stuck at the old one.
+        assert_eq!(last, Some(calibration.raw_to_decigrams(new_raw)));
+    }
+
+    /// Noise bouncing symmetrically around a steady weight averages back out, rather than
+    /// drifting the reading away from the true value.
+    #[test]
+    fn filter_smooths_symmetric_noise() {
+        let mut filter = ScaleReadingFilter::default();
+        let calibration = ScaleCalibration {
+            offset: 1000,
+            scale: 20.0,
+        };
+        let mut last = None;
+        for i in 0..WINDOW_SAMPLES {
+            let jitter = if i % 2 == 0 { 5 } else { -5 };
+            last = filter.accept(1000 + jitter, calibration);
+        }
+        assert_eq!(last, Some(0));
     }
 
     #[test]
