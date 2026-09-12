@@ -1,4 +1,6 @@
 (sym_lib_table
 	(version 7)
 	(lib (name "Maratui Symbols") (type "KiCad") (uri "${KIPRJMOD}/lib/symbols") (options "") (descr ""))
+	(lib (name "Esp32_30pin") (type "KiCad") (uri "${KIPRJMOD}/lib/symbols/esp32_30pin.kicad_sym") (options "") (descr ""))
+	(lib (name "ili9341_touch") (type "KiCad") (uri "${KIPRJMOD}/lib/symbols/tft_320x240.kicad_sym") (options "") (descr ""))
 )

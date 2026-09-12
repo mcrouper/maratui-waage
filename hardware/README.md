@@ -17,6 +17,7 @@ Custom ESP32 controller board for the [Lelit Mara X](https://lelitcoffee.com/pro
 | SW1 | Tactile switch | |
 | J1 | Barrel jack (power) | |
 | J2 | 3-pin connector (GND + UART) | |
+| U3, U4 | HX711 load-cell amplifier (one per scale cell) | |
 
 ## Wiring
 
@@ -40,6 +41,20 @@ Custom ESP32 controller board for the [Lelit Mara X](https://lelitcoffee.com/pro
 | TX       | GPIO17     | UART1 TX |
 | RX       | GPIO16     | UART1 RX |
 
+### Scale (dual HX711 load cells)
+
+| HX711 Pin    | ESP32 GPIO | Notes |
+|--------------|------------|-------|
+| DOUT (left)  | GPIO25     | Data, left load cell (input on ESP32) |
+| SCK (left)   | GPIO26     | Clock, left load cell (output from ESP32) |
+| DOUT (right) | GPIO32     | Data, right load cell (input on ESP32) |
+| SCK (right)  | GPIO27     | Clock, right load cell (output from ESP32) |
+
+Each HX711 has its **own** DOUT and SCK line (not shared) so the two cells can be clocked and
+read independently — one under each side of the drip tray. See
+[`docs/hardware.md`](../docs/hardware.md) for E+/E-/A+/A- load-cell wiring and the calibration
+procedure.
+
 ### Button
 
 | Button   | ESP32 GPIO | Notes |
@@ -50,6 +65,7 @@ Button connects GPIO to **GND** via a tactile switch (active LOW, falling-edge d
 
 - Short press (< 500 ms): cycle screens (Dashboard ↔ Graphs)
 - Long press (≥ 500 ms): toggle Debug screen
+- Hold (3 s): start the scale calibration wizard
 
 ## Custom Libraries
 
@@ -64,6 +80,16 @@ Non-standard components are bundled in `lib/` so the project opens without missi
 
 ## Manufacturing
 
-Gerber files for fabrication: `gerbers/maratui-v1.zip`
+Gerber files for fabrication: `gerbers/gerbers.zip` (base board), `gerbers/260903_Platine_waage.zip` (scale add-on board)
+
+## 3D-Printed Parts (`3d-print/`)
+
+Printable case parts for the dual load-cell scale mount:
+
+| File | Description |
+|------|-------------|
+| `doppelfuss.stp` / `ImageToStl.com_doppelfuss.stl` | Double foot — mounts both load cells |
+| `auflage_v2.stp` / `ImageToStl.com_auflage_v2.stl` | Scale platform/tray (v2) |
+| `CCR10S_ImageToStl.com_auflage_v2.gcode` | Pre-sliced G-code for the platform (Creality CR-10S) |
 
 Tested with JLCPCB default 2-layer settings.
