@@ -12,9 +12,16 @@ MaraTUI is an embedded Rust TUI application for the **Lelit Mara X** espresso ma
 
 ## Build Targets and Features
 
-The crate has two mutually exclusive features:
+The crate has two mutually exclusive base features:
 - `device` (default) — targets `xtensa-esp32-espidf`, requires the `esp` toolchain channel
 - `simulator` — targets the host OS, uses SDL2 for display emulation and `rumqttc` for MQTT
+
+Two more features layer on top of either base feature:
+- `home-assistant` — publishes MQTT Discovery configs directly from the firmware
+- `scale-test` — bring-up build variant for the scale only: no Lelit Mara UART connection is
+  expected, and the Dashboard's main content area is replaced by a raw (uncalibrated, untared)
+  left/right/sum ADC-counts readout instead of the normal machine telemetry. See
+  `docs/hardware.md`.
 
 The toolchain is pinned in `rust-toolchain.toml` to `channel = "esp"` (Espressif's fork).
 
@@ -74,19 +81,23 @@ The public interface all platform setups call. `MaraUi` is the concrete implemen
 - `MachineState` holds rolling `VecDeque<f64>` buffers (capped at 300 points each, pushed in triples) for the three temperature series shown in the Graphs screen.
 
 ### Screens (`src/screens/`)
-Each screen is a zero-size struct implementing the `Board` trait (`fn render(state, area, frame)`). Screen rotation (Button1 short = next, Button2 short = previous) wraps through `[Main, Dashboard, Graphs]`; the `Debug` screen is only reachable via Button1+Button2 simultaneously. `CalibrationWizard` is not part of the rotation — it overlays whatever screen is active whenever `GlobalAppState::calibration_step` is `Some`.
+Each screen is a zero-size struct implementing the `Board` trait (`fn render(state, area, frame)`). There is a **single physical button** (Button1). `Screen` (`src/screens/screen.rs`) is `{ Dashboard (default), Graphs, Debug }`; a short press toggles `Dashboard ↔ Graphs` (`Screen::next`/`previous` are the same swap — one button, no real "previous"), a long press enters/exits `Debug` (`screen_before_debug` restores whichever of the two it interrupted). The boot/loading screen (`Connecting`) is not a `Screen` variant — `MaraUi::draw()` shows it whenever `GlobalAppState::machine_state.last_frame` is still `None`, before any telemetry (or, on the simulator/`EnterOfflineMode`, a synthetic offline frame) has arrived. `CalibrationWizard` is not part of the rotation either — it overlays whatever screen is active whenever `GlobalAppState::calibration_step` is `Some`.
 
 ### Scale (`src/hx711.rs`, `src/scale.rs`)
 - `hx711.rs` (device only) bit-bangs the HX711 protocol for two independent load cells, each with its own DOUT/SCK pair (left: GPIO25/GPIO26, right: GPIO32/GPIO27), gain 128 / channel A. See `docs/hardware.md` for the full pin mapping.
-- `scale.rs` is hardware-agnostic calibration math (`ScaleCalibration { offset, scale }`) plus NVS byte (de)serialization, reused by both the device driver and tests.
+- `scale.rs` is hardware-agnostic (no GPIO/NVS access) so it's reused identically by the device driver, the simulator, and unit tests:
+  - `ScaleCalibration { offset, scale }` converts raw ADC counts to decigrams; `DualScaleCalibration` holds one per cell plus NVS byte (de)serialization.
+  - `ScaleReadingFilter` smooths each cell's raw samples with a **rolling trimmed-mean window** (`WINDOW_SAMPLES = 32`, drop the single highest and lowest sample) before calibrating them — the same approach the widely-used `HX711_ADC` Arduino library uses (e.g. in the CleverCoffee espresso-PID firmware). It deliberately does *not* reject a reading for being too different from the previous one: an early step-limiting design could get permanently stuck, since a real, fast weight change gets rejected as implausible and every later sample is still compared against the same stale reference.
 - Calibration is triggered by holding Button1 for 3s, which starts the `CalibrationWizard` (see `GlobalAppState::calibration_step` / `CalibrationStep`). The device loop (`setup.rs`) performs the actual blocking HX711 reads for the `Taring`/`Calibrating` steps and reports back via `AppEvent::CalibrationStepResult`; calibration persists to NVS under the `"scale"` namespace.
-- The Dashboard shows live weight (`GlobalAppState::weight_dg`, in decigrams) and auto-tares the moment a shot starts (`AppEvent::ShotStarted`) so it displays net extracted weight.
+- Before any calibration has ever been saved to NVS, `load_calibration()` in `setup.rs` falls back to `ASSUMED_CALIBRATION_LEFT`/`_RIGHT` — rough, per-cell bring-up values (measured empty-scale offsets, a guessed counts/gram scale) so a freshly flashed board shows *some* moving reading instead of a hard-rejected/frozen one, enough to confirm each cell's wiring is alive before running the real wizard. Grams are wrong until the wizard is run; only the fact that the reading *moves* is meaningful.
+- The Dashboard shows live weight (`GlobalAppState::weight_dg`, in decigrams) and auto-tares the moment a shot starts (`AppEvent::ShotStarted`) so it displays net extracted weight. The shot gauge ("%" column) tracks extracted weight, not elapsed time: `WEIGHT_GAUGE_MAX_DG` (40g) is 100%.
+- Because the two HX711s free-run on independent, unsynchronized conversion cycles, they're essentially never "ready" on the same loop tick — `setup.rs` tracks each cell's *latest known* reading and sums those, rather than summing `left.unwrap_or(0) + right.unwrap_or(0)` (which would treat whichever cell isn't ready *this exact tick* as reading zero).
 
 ### Assets (`assets/`)
 Raw RGB565 image files are `include_bytes!`-embedded at compile time. To regenerate from PNG:
 ```bash
-ffmpeg -f lavfi -i color=black:s=180x180 -i rat_barista.png \
-  -filter_complex "[1:v]scale=180:180[scaled];[0:v][scaled]overlay" \
+ffmpeg -f lavfi -i color=black:s=180x240 -i rat_barista.png \
+  -filter_complex "[1:v]scale=180:240[scaled];[0:v][scaled]overlay" \
   -f rawvideo -pix_fmt rgb565be -frames:v 1 rat_barista.raw
 ```
 
