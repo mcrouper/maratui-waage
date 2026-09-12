@@ -2,6 +2,10 @@
 
 Custom ESP32 controller board for the [Lelit Mara X](https://lelitcoffee.com/product/mara-x/) espresso machine.
 
+## PCB Render
+
+![PCB render](renders/maratui.png)
+
 ## Components
 
 | Ref | Part | Link |
