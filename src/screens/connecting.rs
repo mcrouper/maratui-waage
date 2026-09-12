@@ -44,7 +44,7 @@ impl Connecting {
 
         let title_big_text = BigText::builder()
             .alignment(ratatui::layout::HorizontalAlignment::Center)
-            .lines(vec!["MARA".into(), "TUI".into()])
+            .lines(vec!["MAXI".into(), "TUI".into()])
             .style(Style::new().yellow())
             .pixel_size(tui_widgets::big_text::PixelSize::Quadrant)
             .build();

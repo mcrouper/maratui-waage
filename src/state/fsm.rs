@@ -1,7 +1,10 @@
 use log::{error, info};
 
 use super::global_state::MACHINE_OFFLINE_TIMEOUT;
-use super::{AppError, AppEvent, ConnectionStatus, DeviceInfo, ExtractionState, GlobalAppState};
+use super::{
+    AppError, AppEvent, CalibrationStep, ConnectionStatus, DeviceInfo, ExtractionState,
+    GlobalAppState,
+};
 use crate::button::{Button, ButtonPressType};
 #[cfg(feature = "home-assistant")]
 use crate::home_assistant;
@@ -31,6 +34,10 @@ impl AppStateMachine {
                     started_at: Instant::now(),
                 };
                 state.error = None;
+                // Tare out whatever is currently on the scale (e.g. the empty cup) so the
+                // Dashboard shows net extracted weight for this shot.
+                state.scale_tare_dg = state.last_raw_weight_dg.unwrap_or(0);
+                state.weight_dg = Some(0);
             }
 
             AppEvent::ShotEnded { duration } => {
@@ -148,11 +155,100 @@ impl AppStateMachine {
             AppEvent::LoadingComplete => {
                 state.loading_status = Some(("waiting for machine...", 100));
             }
+
+            AppEvent::EnterOfflineMode => {
+                if state.machine_state.last_frame.is_none() {
+                    state.machine_state.last_frame = Some(TelemetryFrame::offline_frame());
+                    state.offline_mode = true;
+                    state.last_activity_at = Some(Instant::now());
+                    state.request_redraw();
+                }
+            }
+
+            AppEvent::WeightUpdated { weight_dg } => {
+                state.last_raw_weight_dg = Some(weight_dg);
+                state.weight_dg = Some(weight_dg - state.scale_tare_dg);
+            }
+
+            AppEvent::RawWeightUpdated { left, right } => {
+                state.raw_weight_left = left;
+                state.raw_weight_right = right;
+            }
+
+            AppEvent::StartCalibration => {
+                if state.calibration_step.is_none() {
+                    state.screen_before_calibration = Some(state.current_screen);
+                    state.calibration_step = Some(CalibrationStep::ConfirmEmptyLeft);
+                    state.request_redraw();
+                }
+            }
+
+            AppEvent::CalibrationConfirm => {
+                state.calibration_step = match state.calibration_step {
+                    Some(CalibrationStep::ConfirmEmptyLeft) => Some(CalibrationStep::TaringLeft),
+                    Some(CalibrationStep::ConfirmReferenceLeft) => {
+                        Some(CalibrationStep::CalibratingLeft)
+                    }
+                    Some(CalibrationStep::ConfirmEmptyRight) => Some(CalibrationStep::TaringRight),
+                    Some(CalibrationStep::ConfirmReferenceRight) => {
+                        Some(CalibrationStep::CalibratingRight)
+                    }
+                    // A press on the result screen dismisses the wizard.
+                    Some(CalibrationStep::Done { .. }) => None,
+                    other => other,
+                };
+                if state.calibration_step.is_none() {
+                    if let Some(prev) = state.screen_before_calibration.take() {
+                        state.current_screen = prev;
+                    }
+                    state.request_redraw();
+                }
+            }
+
+            AppEvent::CalibrationCancel => {
+                state.calibration_step = None;
+                if let Some(prev) = state.screen_before_calibration.take() {
+                    state.current_screen = prev;
+                }
+                state.request_redraw();
+            }
+
+            AppEvent::CalibrationStepResult { success } => {
+                state.calibration_step = Some(match (state.calibration_step, success) {
+                    (Some(CalibrationStep::TaringLeft), true) => {
+                        CalibrationStep::ConfirmReferenceLeft
+                    }
+                    (Some(CalibrationStep::CalibratingLeft), true) => {
+                        CalibrationStep::ConfirmEmptyRight
+                    }
+                    (Some(CalibrationStep::TaringRight), true) => {
+                        CalibrationStep::ConfirmReferenceRight
+                    }
+                    (Some(CalibrationStep::CalibratingRight), true) => {
+                        CalibrationStep::Done { success: true }
+                    }
+                    _ => CalibrationStep::Done { success: false },
+                });
+            }
         }
     }
 
     /// Handle button press events
     pub fn handle_button_press(state: &mut GlobalAppState, button: Button) {
+        // While the calibration wizard is active, button presses drive it instead of the
+        // usual screen navigation / Debug toggle.
+        if state.calibration_step.is_some() {
+            match button {
+                Button::Button1(ButtonPressType::Short) => {
+                    Self::handle_event(state, AppEvent::CalibrationConfirm);
+                }
+                Button::Button1(ButtonPressType::Long) => {
+                    Self::handle_event(state, AppEvent::CalibrationCancel);
+                }
+            }
+            return;
+        }
+
         // Long press always toggles Debug, even during loading.
         if let Button::Button1(ButtonPressType::Long) = button {
             Self::handle_event(state, AppEvent::DebugScreen);
@@ -187,6 +283,7 @@ impl AppStateMachine {
 
     /// Handle telemetry frame updates
     pub fn handle_telemetry_frame(state: &mut GlobalAppState, frame: TelemetryFrame, now: Instant) {
+        state.offline_mode = false;
         state.enqueue_mqtt_message("telemetry", telemetry_payload(&frame));
 
         // A new session starts on the very first frame, or when telemetry resumes after the
@@ -604,5 +701,94 @@ mod tests {
         AppStateMachine::handle_event(&mut state, AppEvent::DebugScreen);
         AppStateMachine::handle_event(&mut state, AppEvent::DebugScreen);
         assert_eq!(state.current_screen, Screen::Dashboard);
+    }
+
+    #[test]
+    fn test_calibration_start_saves_screen_and_sets_confirm_left_empty() {
+        let mut state = GlobalAppState::default();
+        state.current_screen = Screen::Graphs;
+
+        AppStateMachine::handle_event(&mut state, AppEvent::StartCalibration);
+
+        assert_eq!(state.calibration_step, Some(CalibrationStep::ConfirmEmptyLeft));
+        assert_eq!(state.screen_before_calibration, Some(Screen::Graphs));
+    }
+
+    #[test]
+    fn test_calibration_confirm_advances_left_then_right_steps() {
+        let mut state = GlobalAppState::default();
+        state.calibration_step = Some(CalibrationStep::ConfirmEmptyLeft);
+        AppStateMachine::handle_event(&mut state, AppEvent::CalibrationConfirm);
+        assert_eq!(state.calibration_step, Some(CalibrationStep::TaringLeft));
+
+        state.calibration_step = Some(CalibrationStep::ConfirmReferenceLeft);
+        AppStateMachine::handle_event(&mut state, AppEvent::CalibrationConfirm);
+        assert_eq!(state.calibration_step, Some(CalibrationStep::CalibratingLeft));
+
+        state.calibration_step = Some(CalibrationStep::ConfirmEmptyRight);
+        AppStateMachine::handle_event(&mut state, AppEvent::CalibrationConfirm);
+        assert_eq!(state.calibration_step, Some(CalibrationStep::TaringRight));
+    }
+
+    #[test]
+    fn test_calibration_step_result_transitions_for_both_cells() {
+        let mut state = GlobalAppState::default();
+
+        state.calibration_step = Some(CalibrationStep::TaringLeft);
+        AppStateMachine::handle_event(&mut state, AppEvent::CalibrationStepResult { success: true });
+        assert_eq!(state.calibration_step, Some(CalibrationStep::ConfirmReferenceLeft));
+
+        state.calibration_step = Some(CalibrationStep::CalibratingLeft);
+        AppStateMachine::handle_event(&mut state, AppEvent::CalibrationStepResult { success: true });
+        assert_eq!(state.calibration_step, Some(CalibrationStep::ConfirmEmptyRight));
+
+        state.calibration_step = Some(CalibrationStep::TaringRight);
+        AppStateMachine::handle_event(&mut state, AppEvent::CalibrationStepResult { success: true });
+        assert_eq!(state.calibration_step, Some(CalibrationStep::ConfirmReferenceRight));
+
+        state.calibration_step = Some(CalibrationStep::CalibratingRight);
+        AppStateMachine::handle_event(&mut state, AppEvent::CalibrationStepResult { success: true });
+        assert_eq!(state.calibration_step, Some(CalibrationStep::Done { success: true }));
+
+        state.calibration_step = Some(CalibrationStep::TaringLeft);
+        AppStateMachine::handle_event(&mut state, AppEvent::CalibrationStepResult { success: false });
+        assert_eq!(state.calibration_step, Some(CalibrationStep::Done { success: false }));
+    }
+
+    #[test]
+    fn test_calibration_cancel_restores_previous_screen() {
+        let mut state = GlobalAppState::default();
+        state.current_screen = Screen::Debug;
+        state.screen_before_calibration = Some(Screen::Graphs);
+        state.calibration_step = Some(CalibrationStep::ConfirmReferenceRight);
+
+        AppStateMachine::handle_event(&mut state, AppEvent::CalibrationCancel);
+
+        assert_eq!(state.calibration_step, None);
+        assert_eq!(state.current_screen, Screen::Graphs);
+    }
+
+    #[test]
+    fn test_calibration_confirm_on_done_dismisses_wizard() {
+        let mut state = GlobalAppState::default();
+        state.current_screen = Screen::Dashboard;
+        state.screen_before_calibration = Some(Screen::Dashboard);
+        state.calibration_step = Some(CalibrationStep::Done { success: true });
+
+        AppStateMachine::handle_event(&mut state, AppEvent::CalibrationConfirm);
+
+        assert_eq!(state.calibration_step, None);
+    }
+
+    #[test]
+    fn test_button_press_during_calibration_confirms_and_cancels() {
+        let mut state = GlobalAppState::default();
+        state.calibration_step = Some(CalibrationStep::ConfirmEmptyLeft);
+
+        AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Short));
+        assert_eq!(state.calibration_step, Some(CalibrationStep::TaringLeft));
+
+        AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Long));
+        assert_eq!(state.calibration_step, None);
     }
 }

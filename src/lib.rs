@@ -15,6 +15,13 @@ pub use setup_simulator::run_app;
 /// Button handling.
 pub mod button;
 
+/// HX711 load-cell amplifier driver (device only — bit-bangs a shared SCK with two DOUT pins).
+#[cfg(not(feature = "simulator"))]
+pub mod hx711;
+
+/// Scale calibration math (offset/scale conversion, NVS byte encoding). Hardware-agnostic.
+pub mod scale;
+
 pub mod telemetry;
 
 pub mod screens;

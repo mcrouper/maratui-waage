@@ -531,6 +531,7 @@
       "netlist": "",
       "plot": "gerbers/",
       "specctra_dsn": "",
+      "step": "maratui.step",
       "vrml": ""
     },
     "page_layout_descr_file": ""
@@ -653,7 +654,7 @@
         "uuid": "a540c3a1-0170-4917-bab3-acc0a8be0dac"
       }
     ],
-    "used_designators": "",
+    "used_designators": "#PWR1,#PWR3-4,#PWR10-11,J1-5",
     "variants": []
   },
   "sheets": [

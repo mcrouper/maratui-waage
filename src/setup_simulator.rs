@@ -2,7 +2,7 @@ use crate::app::MaraUiApp;
 use crate::button::{Button, ButtonPressType};
 use crate::config::AppConfig;
 use crate::state::global_state::MqttOutboundMessage;
-use crate::state::{AppEvent, ConnectionStatus, DeviceInfo};
+use crate::state::{AppEvent, CalibrationStep, ConnectionStatus, DeviceInfo};
 use crate::telemetry::TelemetryFrame;
 use mousefood::embedded_graphics::prelude::Size;
 use mousefood::fonts::*;
@@ -74,10 +74,18 @@ fn run_app_simulator(mut app: impl MaraUiApp) {
         std::thread::sleep(Duration::from_millis(delay_ms));
     }
     app.handle_event(AppEvent::LoadingComplete);
+    std::thread::sleep(Duration::from_secs(5));
+    app.handle_event(AppEvent::EnterOfflineMode);
 
     const STATUS_INTERVAL: Duration = Duration::from_secs(30);
     let boot_time = Instant::now();
     let mut last_status_at: Option<Instant> = None;
+
+    // Simulated HX711 reading: rises while a pump-on debug frame is "extracting" (Up key)
+    // so the Dashboard weight readout can be exercised without real scale hardware.
+    let mut sim_pump_on = false;
+    let mut sim_raw_weight_dg: i32 = 0;
+    let mut last_weight_tick_at = Instant::now();
 
     loop {
         app.tick();
@@ -94,6 +102,28 @@ fn run_app_simulator(mut app: impl MaraUiApp) {
             })
             .unwrap();
 
+        // Simulate a dripping scale while the debug pump-on frame is "extracting".
+        let now_w = Instant::now();
+        if sim_pump_on && now_w.duration_since(last_weight_tick_at) >= Duration::from_millis(100) {
+            last_weight_tick_at = now_w;
+            sim_raw_weight_dg += 2; // ~0.2g per 100ms => ~2g/s simulated pour rate
+            app.handle_event(AppEvent::WeightUpdated {
+                weight_dg: sim_raw_weight_dg,
+            });
+        }
+
+        // The wizard has no real HX711 in the simulator — auto-resolve its transient steps
+        // so the on-screen flow can still be exercised end-to-end (press C to start it).
+        if matches!(
+            app.calibration_step(),
+            Some(CalibrationStep::TaringLeft)
+                | Some(CalibrationStep::CalibratingLeft)
+                | Some(CalibrationStep::TaringRight)
+                | Some(CalibrationStep::CalibratingRight)
+        ) {
+            app.handle_event(AppEvent::CalibrationStepResult { success: true });
+        }
+
         for event in simulator_window.borrow_mut().events() {
             match event {
                 SimulatorEvent::Quit => std::process::exit(0),
@@ -108,12 +138,15 @@ fn run_app_simulator(mut app: impl MaraUiApp) {
                             app.handle_press(Button::Button1(ButtonPressType::Short));
                         }
                         Keycode::Up => {
+                            sim_pump_on = true;
                             app.update_telemetry(TelemetryFrame::debug_pump_on_frame());
                         }
                         Keycode::Down => {
+                            sim_pump_on = false;
                             app.update_telemetry(TelemetryFrame::debug_frame());
                         }
                         Keycode::Space => {
+                            sim_pump_on = false;
                             app.update_telemetry(TelemetryFrame::debug_no_water_frame());
                         }
                         Keycode::M => {
@@ -121,6 +154,9 @@ fn run_app_simulator(mut app: impl MaraUiApp) {
                                 topic_suffix: "events".to_string(),
                                 payload: "{\"type\":\"manual_sim_event\"}".to_string(),
                             });
+                        }
+                        Keycode::C => {
+                            app.handle_event(AppEvent::StartCalibration);
                         }
                         Keycode::D => {
                             app.handle_press(Button::Button1(ButtonPressType::Long));

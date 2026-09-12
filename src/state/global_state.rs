@@ -93,6 +93,29 @@ pub struct DeviceInfo {
     pub last_telemetry_age_s: Option<u64>,
 }
 
+/// Step of the on-screen HX711 scale calibration wizard, started by holding Button1 for 3s.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CalibrationStep {
+    /// Ask the user to empty the left scale; a short press confirms and starts taring.
+    ConfirmEmptyLeft,
+    /// Averaging raw samples for the left scale zero-point.
+    TaringLeft,
+    /// Ask the user to place the reference weight on the left scale.
+    ConfirmReferenceLeft,
+    /// Averaging raw samples with the left scale reference weight.
+    CalibratingLeft,
+    /// Ask the user to empty the right scale; a short press confirms and starts taring.
+    ConfirmEmptyRight,
+    /// Averaging raw samples for the right scale zero-point.
+    TaringRight,
+    /// Ask the user to place the reference weight on the right scale.
+    ConfirmReferenceRight,
+    /// Averaging raw samples with the right scale reference weight.
+    CalibratingRight,
+    /// Final result, shown briefly before returning to the previous screen.
+    Done { success: bool },
+}
+
 /// Application errors
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AppError {
@@ -146,9 +169,28 @@ pub struct GlobalAppState {
     pub device_info: DeviceInfo,
     /// Current boot loading stage; `None` before first stage fires, frozen at 100% while waiting for machine
     pub loading_status: Option<(&'static str, u8)>,
+    /// Whether the dashboard is being shown for standalone scale testing without Mara telemetry.
+    pub offline_mode: bool,
     /// Set by the state machine to ask the render loop for a full `terminal.clear()`
     /// (new session, Debug toggle). Drained once per frame via `take_redraw_request`.
     pub needs_terminal_clear: bool,
+    /// Latest raw scale reading in decigrams (0.1g), before the session tare is applied.
+    pub last_raw_weight_dg: Option<i32>,
+    /// Scale reading shown on screen: `last_raw_weight_dg` minus `scale_tare_dg`.
+    pub weight_dg: Option<i32>,
+    /// Raw reading captured at the moment the last shot started; subtracted from
+    /// subsequent readings so the Dashboard shows net (cup-tared) extracted weight.
+    pub scale_tare_dg: i32,
+    /// Current step of the scale calibration wizard, if active (started by a 3s button hold).
+    pub calibration_step: Option<CalibrationStep>,
+    /// Screen to return to once calibration finishes or is cancelled.
+    pub screen_before_calibration: Option<Screen>,
+    /// Latest raw (uncalibrated) HX711 ADC count from the left cell. Only populated by the
+    /// `scale-test` build variant, which bypasses calibration entirely.
+    pub raw_weight_left: Option<i32>,
+    /// Latest raw (uncalibrated) HX711 ADC count from the right cell. Only populated by the
+    /// `scale-test` build variant.
+    pub raw_weight_right: Option<i32>,
 }
 
 impl Default for GlobalAppState {
@@ -171,7 +213,15 @@ impl Default for GlobalAppState {
             mqtt_topic_prefix: "mara".to_string(),
             device_info: DeviceInfo::default(),
             loading_status: None,
+            offline_mode: false,
             needs_terminal_clear: false,
+            last_raw_weight_dg: None,
+            weight_dg: None,
+            scale_tare_dg: 0,
+            calibration_step: None,
+            screen_before_calibration: None,
+            raw_weight_left: None,
+            raw_weight_right: None,
         }
     }
 }
@@ -249,6 +299,9 @@ impl GlobalAppState {
     /// Returns `true` while telemetry is fresh enough to consider the machine online
     /// (a UART frame arrived within the last `MACHINE_OFFLINE_TIMEOUT`).
     pub fn machine_online(&self, now: Instant) -> bool {
+        if self.offline_mode {
+            return true;
+        }
         match self.last_uart_frame_at {
             Some(last) => now.saturating_duration_since(last) < MACHINE_OFFLINE_TIMEOUT,
             None => false,

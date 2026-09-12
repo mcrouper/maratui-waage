@@ -1,8 +1,14 @@
 use crate::app::MaraUiApp;
 use crate::button::{Button, ButtonState};
 use crate::config::AppConfig;
+use crate::hx711::Hx711;
+#[cfg(feature = "scale-test")]
+use crate::scale::RawSignalSmoother;
+use crate::scale::{
+    CALIBRATION_REFERENCE_G, DualScaleCalibration, ScaleCalibration, ScaleReadingFilter,
+};
 use crate::state::global_state::MqttOutboundMessage;
-use crate::state::{AppEvent, ConnectionStatus, DeviceInfo};
+use crate::state::{AppEvent, CalibrationStep, ConnectionStatus, DeviceInfo};
 use crate::telemetry::TelemetryFrame;
 use mousefood::embedded_graphics::prelude::{DrawTarget, RgbColor};
 use mousefood::fonts::*;
@@ -23,7 +29,7 @@ use esp_idf_svc::mqtt::client::{
     EspMqttClient, EventPayload, MqttClientConfiguration, MqttProtocolVersion, QoS,
 };
 use esp_idf_svc::netif::{EspNetif, NetifConfiguration, NetifStack};
-use esp_idf_svc::nvs::EspDefaultNvsPartition;
+use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
 use esp_idf_svc::wifi::{
     AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi, WifiDriver,
 };
@@ -95,6 +101,10 @@ fn run_app_hardware(mut app: impl MaraUiApp) {
     let uart_tx = peripherals.pins.gpio17;
     let uart_rx = peripherals.pins.gpio16;
     let button1_pin = peripherals.pins.gpio12;
+    let hx711_dout_left = peripherals.pins.gpio25;
+    let hx711_dout_right = peripherals.pins.gpio32;
+    let hx711_sck_left = peripherals.pins.gpio26;
+    let hx711_sck_right = peripherals.pins.gpio27;
 
     let mut display =
         get_ili9341(spi_p, dc, mosi, sclk, cs, rst).expect("Failed to initialize display");
@@ -119,6 +129,28 @@ fn run_app_hardware(mut app: impl MaraUiApp) {
     let backend = EmbeddedBackend::new(&mut display, config);
     let mut terminal = Terminal::new(backend).unwrap();
 
+    // ── Scale (HX711) ──────────────────────────────────────────────────────
+    // NVS is also used by Wi-Fi below; clone the partition so both can hold a handle.
+    let nvs_partition = EspDefaultNvsPartition::take().ok();
+    let mut scale_nvs: Option<EspNvs<NvsDefault>> = nvs_partition
+        .clone()
+        .and_then(|p| EspNvs::new(p, "scale", true).ok());
+    let mut calibration = load_calibration(scale_nvs.as_ref());
+    let mut hx711 = Hx711::new(
+        hx711_dout_left,
+        hx711_dout_right,
+        hx711_sck_left,
+        hx711_sck_right,
+    )
+    .expect("Failed to initialize HX711");
+    let mut left_filter = ScaleReadingFilter::default();
+    let mut right_filter = ScaleReadingFilter::default();
+    #[cfg(feature = "scale-test")]
+    let (mut left_raw_smoother, mut right_raw_smoother) =
+        (RawSignalSmoother::default(), RawSignalSmoother::default());
+    #[cfg(feature = "scale-test")]
+    const RAW_SMOOTHING_ALPHA: f32 = 0.2;
+
     // ── WiFi ────────────────────────────────────────────────────────────────
     app.handle_event(AppEvent::WifiStatusChanged(ConnectionStatus::Connecting));
     app.handle_event(AppEvent::MqttStatusChanged(ConnectionStatus::Connecting));
@@ -129,7 +161,7 @@ fn run_app_hardware(mut app: impl MaraUiApp) {
     app.render_image(terminal.backend_mut().display_mut());
     terminal.draw(|f| app.draw(f)).unwrap();
 
-    let (mut wifi, _) = init_wifi(modem, &app_config);
+    let (mut wifi, _) = init_wifi(modem, &app_config, nvs_partition);
     app.handle_event(AppEvent::WifiStatusChanged(ConnectionStatus::Connected));
 
     // ── MQTT ────────────────────────────────────────────────────────────────
@@ -185,12 +217,22 @@ fn run_app_hardware(mut app: impl MaraUiApp) {
 
     // Freeze the bar at 100% with "waiting for machine..." until first UART frame
     app.handle_event(AppEvent::LoadingComplete);
+    let standalone_dashboard_at = Instant::now() + Duration::from_secs(5);
+    let mut entered_offline_mode = false;
 
     let boot_time = Instant::now();
     let mut last_status_at: Option<Instant> = None;
     let mut last_wifi_check_at: Option<Instant> = None;
     let mut wifi_reconnect_at: Option<Instant> = None;
     let mut wifi_was_connected = true;
+    // The two HX711s run on independent, unsynchronized conversion cycles, so they're almost
+    // never "ready" on the same loop iteration. Track each cell's latest known reading here so
+    // the combined total always reflects both cells, rather than treating whichever cell isn't
+    // ready *this exact tick* as if it were reading 0.
+    let mut last_left_weight_dg: Option<i32> = None;
+    let mut last_right_weight_dg: Option<i32> = None;
+    // TEMPORARY: verifying the trimmed-mean scale filter over serial — remove once confirmed.
+    let mut last_logged_weight_dg: Option<i32> = None;
 
     loop {
         app.tick();
@@ -199,8 +241,152 @@ fn run_app_hardware(mut app: impl MaraUiApp) {
             app.handle_press(Button::Button1(press_type));
         });
 
+        // Holding Button1 for 3s (while not already in the wizard) starts scale calibration.
+        if button1_state.held_for(button1.is_low(), CALIBRATION_HOLD_DURATION) {
+            app.handle_event(AppEvent::StartCalibration);
+        }
+
         while let Ok(telemetry) = rx.try_recv() {
             app.update_telemetry(telemetry);
+        }
+
+        if !entered_offline_mode
+            && app.last_uart_frame_at().is_none()
+            && Instant::now() >= standalone_dashboard_at
+        {
+            app.handle_event(AppEvent::EnterOfflineMode);
+            entered_offline_mode = true;
+        }
+
+        // Non-blocking scale sample: read both HX711s independently and sum the calibrated
+        // weights so the Dashboard shows the total load on both cells. Read as often as the
+        // HX711 has new data (its own conversion rate paces this, not the loop) — the rolling
+        // trimmed-mean window in `ScaleReadingFilter` does the smoothing, so there's no need to
+        // artificially space samples out in time.
+        let left_raw = if hx711.is_left_ready() { hx711.read_left_raw() } else { None };
+        let right_raw = if hx711.is_right_ready() { hx711.read_right_raw() } else { None };
+
+        #[cfg(feature = "scale-test")]
+        if left_raw.is_some() || right_raw.is_some() {
+            // Damp with an EMA so the on-screen readout doesn't jump around on raw ADC noise
+            // (there's no calibration yet to run the normal step-size filter against).
+            let left_smoothed =
+                left_raw.map(|raw| left_raw_smoother.smooth(raw, RAW_SMOOTHING_ALPHA));
+            let right_smoothed =
+                right_raw.map(|raw| right_raw_smoother.smooth(raw, RAW_SMOOTHING_ALPHA));
+            app.handle_event(AppEvent::RawWeightUpdated {
+                left: left_smoothed,
+                right: right_smoothed,
+            });
+        }
+
+        let left_weight = left_raw.and_then(|raw| left_filter.accept(raw, calibration.left));
+        let right_weight = right_raw.and_then(|raw| right_filter.accept(raw, calibration.right));
+        if let Some(w) = left_weight {
+            last_left_weight_dg = Some(w);
+        }
+        if let Some(w) = right_weight {
+            last_right_weight_dg = Some(w);
+        }
+        let total_weight_dg = last_left_weight_dg.unwrap_or(0) + last_right_weight_dg.unwrap_or(0);
+        if left_weight.is_some() || right_weight.is_some() {
+            if last_logged_weight_dg != Some(total_weight_dg) {
+                info!(
+                    "Scale: {:.1}g (left={:?}dg right={:?}dg)",
+                    total_weight_dg as f32 / 10.0,
+                    last_left_weight_dg,
+                    last_right_weight_dg
+                );
+                last_logged_weight_dg = Some(total_weight_dg);
+            }
+            app.handle_event(AppEvent::WeightUpdated { weight_dg: total_weight_dg });
+        }
+
+        // The wizard's transient steps (Taring/Calibrating) are performed here with a
+        // short blocking HX711 read on the relevant channel, then reported back so the FSM
+        // can advance to the next channel or finish.
+        match app.calibration_step() {
+            Some(CalibrationStep::TaringLeft) => {
+                let success = match hx711.read_average_blocking_left(10, Duration::from_secs(3)) {
+                    Some(raw) => {
+                        calibration.left.offset = raw;
+                        save_calibration(&mut scale_nvs, &calibration);
+                        info!("Left scale tared: offset={}", raw);
+                        true
+                    }
+                    None => {
+                        warn!("Left scale tare failed: no reading from HX711");
+                        false
+                    }
+                };
+                app.handle_event(AppEvent::CalibrationStepResult { success });
+            }
+            Some(CalibrationStep::CalibratingLeft) => {
+                let success = match hx711.read_average_blocking_left(10, Duration::from_secs(3)) {
+                    Some(raw) => {
+                        let candidate = ScaleCalibration::calibrate(
+                            calibration.left.offset,
+                            raw,
+                            CALIBRATION_REFERENCE_G,
+                        );
+                        if candidate.is_valid() {
+                            calibration.left = candidate;
+                            save_calibration(&mut scale_nvs, &calibration);
+                            info!("Left scale calibrated: scale={}", calibration.left.scale);
+                            true
+                        } else {
+                            warn!("Left scale calibration rejected: reference signal was invalid");
+                            false
+                        }
+                    }
+                    None => {
+                        warn!("Left scale calibration failed: no reading from HX711");
+                        false
+                    }
+                };
+                app.handle_event(AppEvent::CalibrationStepResult { success });
+            }
+            Some(CalibrationStep::TaringRight) => {
+                let success = match hx711.read_average_blocking_right(10, Duration::from_secs(3)) {
+                    Some(raw) => {
+                        calibration.right.offset = raw;
+                        save_calibration(&mut scale_nvs, &calibration);
+                        info!("Right scale tared: offset={}", raw);
+                        true
+                    }
+                    None => {
+                        warn!("Right scale tare failed: no reading from HX711");
+                        false
+                    }
+                };
+                app.handle_event(AppEvent::CalibrationStepResult { success });
+            }
+            Some(CalibrationStep::CalibratingRight) => {
+                let success = match hx711.read_average_blocking_right(10, Duration::from_secs(3)) {
+                    Some(raw) => {
+                        let candidate = ScaleCalibration::calibrate(
+                            calibration.right.offset,
+                            raw,
+                            CALIBRATION_REFERENCE_G,
+                        );
+                        if candidate.is_valid() {
+                            calibration.right = candidate;
+                            save_calibration(&mut scale_nvs, &calibration);
+                            info!("Right scale calibrated: scale={}", calibration.right.scale);
+                            true
+                        } else {
+                            warn!("Right scale calibration rejected: reference signal was invalid");
+                            false
+                        }
+                    }
+                    None => {
+                        warn!("Right scale calibration failed: no reading from HX711");
+                        false
+                    }
+                };
+                app.handle_event(AppEvent::CalibrationStepResult { success });
+            }
+            _ => {}
         }
 
         if let Some(cup_counter_rx) = cup_counter_rx.as_mut() {
@@ -318,6 +504,8 @@ const STATUS_INTERVAL: Duration = Duration::from_secs(30);
 const WIFI_CHECK_INTERVAL: Duration = Duration::from_secs(10);
 const WIFI_RECONNECT_INTERVAL: Duration = Duration::from_secs(15);
 const MIN_STAGE_MS: u64 = 800;
+/// How long Button1 must be held to start the scale calibration wizard.
+const CALIBRATION_HOLD_DURATION: Duration = Duration::from_secs(3);
 
 fn min_stage_delay(started_at: Instant) {
     let elapsed = started_at.elapsed();
@@ -340,12 +528,67 @@ fn query_free_heap() -> u32 {
     unsafe { esp_idf_svc::sys::esp_get_free_heap_size() }
 }
 
+// TEMPORARY wiring sanity-check values — NOT a real calibration. `offset` is each cell's
+// actual empty-scale raw reading, measured live over serial (left ≈ -206,400, right ≈
+// -431,000 — the two cells are nowhere near each other, so they need separate offsets).
+// `scale` is still a rough ballpark (counts/gram) for a small HX711 module at gain 128, so
+// displayed grams are still wrong — but readings now correctly return to ~0g when the scale
+// is empty instead of getting stuck (an all-zero offset put the "empty" reading outside the
+// plausible-weight sanity range, so it was silently rejected and the last loaded reading
+// never got overwritten). Run the real calibration wizard (hold Button1 3s) and remove this
+// fallback once the cells are confirmed working.
+const ASSUMED_CALIBRATION_LEFT: ScaleCalibration = ScaleCalibration {
+    offset: -206_400,
+    scale: 400.0,
+};
+const ASSUMED_CALIBRATION_RIGHT: ScaleCalibration = ScaleCalibration {
+    offset: -431_000,
+    scale: 400.0,
+};
+
+/// Load a persisted dual-scale calibration from NVS, falling back to `ASSUMED_CALIBRATION_*`
+/// (see above) if none was ever saved or NVS is unavailable.
+fn load_calibration(nvs: Option<&EspNvs<NvsDefault>>) -> DualScaleCalibration {
+    let assumed = DualScaleCalibration {
+        left: ASSUMED_CALIBRATION_LEFT,
+        right: ASSUMED_CALIBRATION_RIGHT,
+    };
+
+    let Some(nvs) = nvs else {
+        warn!("NVS unavailable — dual scale will use ASSUMED_CALIBRATION (wiring check only)");
+        return assumed;
+    };
+
+    let mut buf = [0u8; 16];
+    match nvs.get_raw("scale", &mut buf) {
+        Ok(Some(_)) => DualScaleCalibration::from_bytes(buf),
+        Ok(None) => {
+            info!("No stored dual-scale calibration found, using ASSUMED_CALIBRATION (wiring check only)");
+            assumed
+        }
+        Err(e) => {
+            warn!("Failed to read stored dual-scale calibration: {:?}", e);
+            assumed
+        }
+    }
+}
+
+fn save_calibration(nvs: &mut Option<EspNvs<NvsDefault>>, calibration: &DualScaleCalibration) {
+    let Some(nvs) = nvs.as_mut() else {
+        warn!("NVS unavailable — dual scale calibration will not persist across reboot");
+        return;
+    };
+    if let Err(e) = nvs.set_raw("scale", &calibration.to_bytes()) {
+        warn!("Failed to persist dual scale calibration: {:?}", e);
+    }
+}
+
 fn init_wifi(
     modem: esp_idf_svc::hal::modem::Modem,
     app_config: &AppConfig,
+    nvs: Option<EspDefaultNvsPartition>,
 ) -> (EspWifi<'static>, Option<String>) {
     let sys_loop = EspSystemEventLoop::take().expect("Failed to take system event loop");
-    let nvs = EspDefaultNvsPartition::take().ok();
 
     let wifi_cfg = app_config
         .wifi

@@ -45,6 +45,14 @@ pub struct TelemetryFrame {
 }
 
 impl TelemetryFrame {
+    pub fn offline_frame() -> Self {
+        Self {
+            raw_string: "offline".to_string(),
+            mode: MachineMode::Offline,
+            ..Self::default()
+        }
+    }
+
     pub fn debug_frame() -> Self {
         Self {
             raw_string: "C1.10,122,128,092,0000,1,0".to_string(),

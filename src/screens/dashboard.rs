@@ -5,7 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Padding, Paragraph, Widget};
+use ratatui::widgets::{Block, BorderType, Paragraph, Widget};
 use tui_widgets::big_text::{BigText, PixelSize};
 
 use crate::screens::screen::Board;
@@ -21,7 +21,9 @@ const STYLE_WHITE: Style = Style::new().fg(Color::White);
 const STYLE_YELLOW: Style = Style::new().fg(Color::Yellow);
 
 const BOILER_SCALE_MAX: u16 = 160;
-const SHOT_GAUGE_MAX_SECS: u64 = 30;
+// Shot gauge ("%") tracks extracted weight, not elapsed time: 40g (400 decigrams) == 100%.
+const WEIGHT_GAUGE_MAX_DG: i32 = 400;
+const VALUE_PIXEL_SIZE: PixelSize = PixelSize::Quadrant;
 const HX_SCALE_MIN: f64 = 60.0;
 const HX_SCALE_MAX: f64 = 110.0;
 const HX_IDEAL_LOW: f64 = 90.0;
@@ -53,18 +55,41 @@ impl Board for Dashboard {
         render_cup_counter(state.cup_counter, counter_area, buf);
         render_boiler_gauge(t_frame, boiler_area, buf);
 
-        // rule of thirds: 1 | 3 | 1
-        let [info_col, timer_col, gauge_col] = Layout::horizontal([
-            Constraint::Fill(1),
-            Constraint::Fill(3),
-            Constraint::Fill(1),
-        ])
-        .areas(content_area);
-
-        render_info_col(t_frame, info_col, buf);
-        render_shot_gauge(state, gauge_col, buf);
-        render_timer(state, timer_col, frame);
+        render_main_content(state, t_frame, content_area, frame);
     }
+}
+
+/// Normal build: info column | timer | shot gauge, rule of thirds (1:3:1).
+#[cfg(not(feature = "scale-test"))]
+fn render_main_content(
+    state: &GlobalAppState,
+    t_frame: &TelemetryFrame,
+    content_area: Rect,
+    frame: &mut Frame,
+) {
+    let buf = frame.buffer_mut();
+    let [info_col, timer_col, gauge_col] = Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Fill(3),
+        Constraint::Fill(1),
+    ])
+    .areas(content_area);
+
+    render_info_col(t_frame, info_col, buf);
+    render_shot_gauge(state, gauge_col, buf);
+    render_timer(state, timer_col, frame);
+}
+
+/// `scale-test` build: no Mara telemetry to show, so the whole content area becomes one big
+/// raw (uncalibrated, untared) scale readout — right cell, left cell, and their sum, stacked.
+#[cfg(feature = "scale-test")]
+fn render_main_content(
+    state: &GlobalAppState,
+    _t_frame: &TelemetryFrame,
+    content_area: Rect,
+    frame: &mut Frame,
+) {
+    render_raw_weight(state, content_area, frame);
 }
 
 fn render_mode_banner(t_frame: &TelemetryFrame, area: Rect, buf: &mut Buffer) {
@@ -294,7 +319,8 @@ fn render_shot_gauge(state: &GlobalAppState, area: Rect, buf: &mut Buffer) {
     }
 
     let total = inner.height as usize;
-    let ratio = (extraction_secs as f64 / SHOT_GAUGE_MAX_SECS as f64).min(1.0);
+    let weight_dg = state.weight_dg.unwrap_or(0).max(0);
+    let ratio = (weight_dg as f64 / WEIGHT_GAUGE_MAX_DG as f64).min(1.0);
     let filled = (ratio * total as f64).round() as usize;
     let fill_style = shot_style(extraction_secs, state.extraction_state.is_extracting());
     let fill: String = "█".repeat(inner.width as usize);
@@ -312,7 +338,6 @@ fn render_shot_gauge(state: &GlobalAppState, area: Rect, buf: &mut Buffer) {
 }
 
 fn render_timer(state: &GlobalAppState, area: Rect, frame: &mut Frame) {
-    let buf = frame.buffer_mut();
     let extraction_secs = current_extraction_secs(state);
 
     let timer_style = if state.extraction_state.is_extracting() {
@@ -323,24 +348,47 @@ fn render_timer(state: &GlobalAppState, area: Rect, frame: &mut Frame) {
         STYLE_DARK_GRAY
     };
 
+    // Split the column in half: timer on top, weight below, each labeled on top.
+    let [timer_area, weight_area] =
+        Layout::vertical(Constraint::from_fills([1, 1])).areas(area);
+
+    render_timer_half(timer_area, frame, extraction_secs, timer_style, state);
+    render_weight_half(weight_area, frame, state);
+}
+
+fn render_timer_half(
+    area: Rect,
+    frame: &mut Frame,
+    extraction_secs: u64,
+    timer_style: Style,
+    state: &GlobalAppState,
+) {
+    let buf = frame.buffer_mut();
+
+    // No top padding: the vertical Timer/Weight stack leaves only ~6 rows per half, and a
+    // `Quadrant` glyph needs all 4 of the ~4 left after the border — padding ate the row the
+    // glyph needed, clipping its bottom row.
     let timer_block = Block::bordered()
-        .title_bottom("Extraction")
+        .title("Timer")
         .title_alignment(ratatui::layout::HorizontalAlignment::Center)
         .border_type(BorderType::Rounded)
-        .border_style(STYLE_YELLOW)
-        .padding(Padding::top(1));
+        .border_style(STYLE_YELLOW);
 
     let timer_inner = timer_block.inner(area);
     timer_block.render(area, buf);
+    let mut display_area = centered_fixed_height(timer_inner, BIG_TEXT_GLYPH_ROWS);
+    // Nudge the timer digits down 1px, only if there's a spare row below to move into.
+    let shift = 1u16.min(timer_inner.bottom().saturating_sub(display_area.bottom()));
+    display_area.y += shift;
 
     let big_text = BigText::builder()
-        .pixel_size(PixelSize::Full)
+        .pixel_size(VALUE_PIXEL_SIZE)
         .centered()
         .lines(vec![extraction_secs.to_string().into()])
         .style(timer_style)
         .build();
 
-    frame.render_widget(big_text, timer_inner);
+    frame.render_widget(big_text, display_area);
 
     // Post-shot assessment label pinned to the bottom of the block
     if !state.extraction_state.is_extracting()
@@ -357,6 +405,101 @@ fn render_timer(state: &GlobalAppState, area: Rect, frame: &mut Frame) {
             .centered()
             .style(timer_style)
             .render(label_area, buf);
+    }
+}
+
+fn render_weight_half(area: Rect, frame: &mut Frame, state: &GlobalAppState) {
+    let buf = frame.buffer_mut();
+
+    let weight_block = Block::bordered()
+        .title("Weight")
+        .title_alignment(ratatui::layout::HorizontalAlignment::Center)
+        .border_type(BorderType::Rounded)
+        .border_style(STYLE_YELLOW);
+
+    let weight_inner = weight_block.inner(area);
+    weight_block.render(area, buf);
+    let mut display_area = centered_fixed_height(weight_inner, BIG_TEXT_GLYPH_ROWS);
+    // Nudge the weight digits up 2px from their centered position — grow the height by the same
+    // amount so the *bottom* edge doesn't move too, which would clip the glyphs' bottom rows
+    // (where the decimal comma's descender lives).
+    let shift = 2u16.min(display_area.y.saturating_sub(weight_inner.y));
+    display_area.y -= shift;
+    display_area.height += shift;
+
+    let (text, style) = match state.weight_dg {
+        // German decimal comma, not a period.
+        Some(dg) => (format!("{:.1}", dg as f64 / 10.0).replace('.', ","), STYLE_WHITE),
+        None => ("--".to_string(), STYLE_DARK_GRAY),
+    };
+
+    let big_text = BigText::builder()
+        .pixel_size(VALUE_PIXEL_SIZE)
+        .centered()
+        .lines(vec![text.into()])
+        .style(style)
+        .build();
+
+    frame.render_widget(big_text, display_area);
+}
+
+/// `scale-test` build only: raw (uncalibrated, untared, EMA-smoothed) HX711 counts for right
+/// cell, left cell, and their sum — stacked in that order, filling the whole content area.
+///
+/// Uses `PixelSize::Quadrant`, same as the normal Weight/Timer display — that's the smallest
+/// size confirmed to render correctly on this display's embedded font. The smaller
+/// `ThirdHeight`/`Sextant`/etc. sizes pull glyphs from a much rarer Unicode block (Legacy
+/// Computing Symbols) that this font doesn't have, and render as garbage on real hardware.
+/// No bordered `Block` here (unlike the normal Weight box) — three Quadrant-height lines
+/// (4 rows each = 12) barely fit the content area as it is; a border would push it over.
+#[cfg(feature = "scale-test")]
+const RAW_WEIGHT_PIXEL_SIZE: PixelSize = PixelSize::Quadrant;
+
+#[cfg(feature = "scale-test")]
+fn render_raw_weight(state: &GlobalAppState, area: Rect, frame: &mut Frame) {
+    let buf = frame.buffer_mut();
+
+    let [title_area, digits_area] =
+        Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
+
+    Paragraph::new(Line::from("WEIGHT (raw, uncalibrated)"))
+        .centered()
+        .style(STYLE_DARK_GRAY)
+        .render(title_area, buf);
+
+    let fmt = |v: Option<i32>| v.map(|v| v.to_string()).unwrap_or_else(|| "--".to_string());
+    let sum = match (state.raw_weight_left, state.raw_weight_right) {
+        (None, None) => None,
+        (left, right) => Some(left.unwrap_or(0) + right.unwrap_or(0)),
+    };
+
+    let big_text = BigText::builder()
+        .pixel_size(RAW_WEIGHT_PIXEL_SIZE)
+        .centered()
+        .lines(vec![
+            Line::styled(format!("R {}", fmt(state.raw_weight_right)), STYLE_CYAN),
+            Line::styled(format!("L {}", fmt(state.raw_weight_left)), STYLE_WHITE),
+            Line::styled(format!("S {}", fmt(sum)), STYLE_YELLOW),
+        ])
+        .build();
+
+    frame.render_widget(big_text, digits_area);
+}
+
+// Height (in terminal rows) of a single-line `BigText` glyph at `VALUE_PIXEL_SIZE`: the 8x8
+// font compressed by `Quadrant`'s (2,2) packing is 8/2 = 4 rows tall.
+const BIG_TEXT_GLYPH_ROWS: u16 = 4;
+
+/// Vertically centers exactly `content_height` rows within `area` — clamped to `area`'s own
+/// height so it never asks for more space than is actually there (which would clip the glyph
+/// instead of just using less blank margin around it).
+fn centered_fixed_height(area: Rect, content_height: u16) -> Rect {
+    let height = content_height.min(area.height).max(1);
+    Rect {
+        x: area.x,
+        y: area.y + (area.height.saturating_sub(height) / 2),
+        width: area.width,
+        height,
     }
 }
 

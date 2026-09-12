@@ -1,5 +1,5 @@
 use core::fmt;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Type of button press: short or long.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,13 +47,16 @@ impl Button {
 #[derive(Default)]
 pub struct ButtonState {
     pressed_at: Option<Instant>,
+    /// Set once `held_for` has fired for the current press, so `update` doesn't also
+    /// classify the eventual release as a Short/Long press.
+    hold_consumed: bool,
 }
 
 impl ButtonState {
     /// Update the button state based on whether it is currently pressed.
     ///
     /// If the button was just released, it calls the `on_press` callback with the type of press
-    /// detected.
+    /// detected. Suppressed if `held_for` already consumed this press.
     pub fn update<F>(&mut self, is_pressed: bool, on_press: F)
     where
         F: FnOnce(ButtonPressType),
@@ -62,9 +65,15 @@ impl ButtonState {
             // Button is currently down
             if self.pressed_at.is_none() {
                 self.pressed_at = Some(Instant::now());
+                self.hold_consumed = false;
             }
         } else if let Some(pressed_at) = self.pressed_at.take() {
             // Button just released
+            let consumed = std::mem::take(&mut self.hold_consumed);
+            if consumed {
+                return;
+            }
+
             let duration = pressed_at.elapsed().as_millis() as u64;
             let press_type = if duration < 500 {
                 Some(ButtonPressType::Short)
@@ -76,6 +85,23 @@ impl ButtonState {
                 on_press(press_type);
             }
         }
+    }
+
+    /// Returns `true` exactly once per press, the moment `threshold` has elapsed while the
+    /// button is still held down (e.g. "hold 3s to start scale calibration"). Once fired,
+    /// the eventual release no longer triggers a Short/Long press via `update`.
+    pub fn held_for(&mut self, is_pressed: bool, threshold: Duration) -> bool {
+        if !is_pressed {
+            return false;
+        }
+        let Some(pressed_at) = self.pressed_at else {
+            return false;
+        };
+        if !self.hold_consumed && pressed_at.elapsed() >= threshold {
+            self.hold_consumed = true;
+            return true;
+        }
+        false
     }
 }
 
@@ -160,5 +186,35 @@ mod tests {
         state.update(false, |t| received = Some(t));
 
         assert_eq!(received, Some(ButtonPressType::Long));
+    }
+
+    #[test]
+    fn test_held_for_false_before_threshold() {
+        let mut state = ButtonState::default();
+        state.update(true, |_| {});
+        assert!(!state.held_for(true, Duration::from_secs(3)));
+    }
+
+    #[test]
+    fn test_held_for_false_when_not_pressed() {
+        let mut state = ButtonState::default();
+        assert!(!state.held_for(false, Duration::from_millis(0)));
+    }
+
+    #[test]
+    #[ignore = "requires a real hold delay to cross the threshold"]
+    fn test_held_for_fires_once_then_suppresses_release_classification() {
+        let mut state = ButtonState::default();
+        let mut released: Option<ButtonPressType> = None;
+
+        state.update(true, |_| {});
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(state.held_for(true, Duration::from_millis(20)));
+        // Fires only once even if still held and threshold keeps being exceeded.
+        assert!(!state.held_for(true, Duration::from_millis(20)));
+
+        state.update(false, |t| released = Some(t));
+        // The hold already consumed this press, so release must not also fire Short/Long.
+        assert_eq!(released, None);
     }
 }

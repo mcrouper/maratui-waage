@@ -1,8 +1,8 @@
 use crate::button::Button;
 use crate::run_app;
-use crate::screens::{Board, Connecting, Dashboard, Debug, Graphs, Screen};
+use crate::screens::{Board, CalibrationWizard, Connecting, Dashboard, Debug, Graphs, Screen};
 use crate::state::global_state::MqttOutboundMessage;
-use crate::state::{AppEvent, AppStateMachine, ConnectionStatus, GlobalAppState};
+use crate::state::{AppEvent, AppStateMachine, CalibrationStep, ConnectionStatus, GlobalAppState};
 use crate::telemetry::TelemetryFrame;
 use mousefood::embedded_graphics::Drawable;
 use mousefood::embedded_graphics::image::{Image, ImageRaw, ImageRawBE};
@@ -53,6 +53,9 @@ pub trait MaraUiApp {
     /// Current active screen
     fn current_screen(&self) -> Screen;
 
+    /// Current step of the scale calibration wizard, if active
+    fn calibration_step(&self) -> Option<CalibrationStep>;
+
     /// Returns `true` once the first UART telemetry frame has arrived
     fn has_telemetry(&self) -> bool;
 
@@ -95,6 +98,13 @@ impl MaraUiApp for MaraUi {
         if !self.state.machine_online(Instant::now()) && self.state.current_screen != Screen::Debug
         {
             Connecting::render(&self.state, area, frame);
+            return;
+        }
+
+        // Calibration wizard takes over the whole screen while active, regardless of the
+        // screen underneath (it is restored once calibration finishes or is cancelled).
+        if self.state.calibration_step.is_some() {
+            CalibrationWizard::render(&self.state, area, frame);
             return;
         }
 
@@ -141,6 +151,8 @@ impl MaraUiApp for MaraUi {
         let is_loading = self.state.machine_state.last_frame.is_none();
         if is_loading {
             self.state.current_screen == Screen::Debug || self.state.backlight_on
+        } else if self.state.offline_mode {
+            true
         } else {
             self.state.current_screen == Screen::Debug
                 || self.state.backlight_should_be_on(Instant::now())
@@ -149,6 +161,10 @@ impl MaraUiApp for MaraUi {
 
     fn current_screen(&self) -> Screen {
         self.state.current_screen
+    }
+
+    fn calibration_step(&self) -> Option<CalibrationStep> {
+        self.state.calibration_step
     }
 
     fn has_telemetry(&self) -> bool {
