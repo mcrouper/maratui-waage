@@ -528,47 +528,24 @@ fn query_free_heap() -> u32 {
     unsafe { esp_idf_svc::sys::esp_get_free_heap_size() }
 }
 
-// TEMPORARY wiring sanity-check values — NOT a real calibration. `offset` is each cell's
-// actual empty-scale raw reading, measured live over serial (left ≈ -206,400, right ≈
-// -431,000 — the two cells are nowhere near each other, so they need separate offsets).
-// `scale` is still a rough ballpark (counts/gram) for a small HX711 module at gain 128, so
-// displayed grams are still wrong — but readings now correctly return to ~0g when the scale
-// is empty instead of getting stuck (an all-zero offset put the "empty" reading outside the
-// plausible-weight sanity range, so it was silently rejected and the last loaded reading
-// never got overwritten). Run the real calibration wizard (hold Button1 3s) and remove this
-// fallback once the cells are confirmed working.
-const ASSUMED_CALIBRATION_LEFT: ScaleCalibration = ScaleCalibration {
-    offset: -206_400,
-    scale: 400.0,
-};
-const ASSUMED_CALIBRATION_RIGHT: ScaleCalibration = ScaleCalibration {
-    offset: -431_000,
-    scale: 400.0,
-};
-
-/// Load a persisted dual-scale calibration from NVS, falling back to `ASSUMED_CALIBRATION_*`
-/// (see above) if none was ever saved or NVS is unavailable.
+/// Load a persisted dual-scale calibration from NVS, falling back to the uncalibrated default
+/// if none was ever saved or NVS is unavailable.
 fn load_calibration(nvs: Option<&EspNvs<NvsDefault>>) -> DualScaleCalibration {
-    let assumed = DualScaleCalibration {
-        left: ASSUMED_CALIBRATION_LEFT,
-        right: ASSUMED_CALIBRATION_RIGHT,
-    };
-
     let Some(nvs) = nvs else {
-        warn!("NVS unavailable — dual scale will use ASSUMED_CALIBRATION (wiring check only)");
-        return assumed;
+        warn!("NVS unavailable — dual scale will use uncalibrated defaults");
+        return DualScaleCalibration::default();
     };
 
     let mut buf = [0u8; 16];
     match nvs.get_raw("scale", &mut buf) {
         Ok(Some(_)) => DualScaleCalibration::from_bytes(buf),
         Ok(None) => {
-            info!("No stored dual-scale calibration found, using ASSUMED_CALIBRATION (wiring check only)");
-            assumed
+            info!("No stored dual-scale calibration found, using uncalibrated defaults");
+            DualScaleCalibration::default()
         }
         Err(e) => {
             warn!("Failed to read stored dual-scale calibration: {:?}", e);
-            assumed
+            DualScaleCalibration::default()
         }
     }
 }

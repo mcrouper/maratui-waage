@@ -105,8 +105,6 @@ A long press at any step during the wizard cancels without changing the stored
 calibration. The Dashboard shows live weight (left + right combined) once calibrated; it
 auto-tares both cells the moment a shot starts, so it displays the net extracted weight.
 
-**Before the wizard has ever been run** (nothing saved to NVS yet), the firmware falls back
-to rough, per-cell bring-up values (`ASSUMED_CALIBRATION_LEFT`/`_RIGHT` in `src/setup.rs`) so
-a freshly flashed board shows *some* moving weight reading — enough to confirm each cell's
-wiring is alive — rather than a hard-rejected, frozen one. Displayed grams are meaningless
-until the real wizard is run; only the fact that the reading reacts to load is meaningful.
+Before the wizard has ever been run (nothing saved to NVS yet), the scale is uncalibrated
+(`ScaleCalibration::default()`, `scale = 0.0`) and readings are rejected outright — the
+Dashboard shows `--` until calibration completes.
