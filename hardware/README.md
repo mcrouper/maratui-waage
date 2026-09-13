@@ -79,7 +79,7 @@ Non-standard components are bundled in `lib/` so the project opens without missi
 
 ## Manufacturing
 
-Gerber files for fabrication: `gerbers/gerbers.zip` (base board), `gerbers/260903_Platine_waage.zip` (scale add-on board)
+Gerber files for fabrication: `gerbers/gerbers.zip` (single board, scale cells included)
 
 ## 3D-Printed Parts (`3d-print/`)
 
