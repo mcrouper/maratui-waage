@@ -114,3 +114,11 @@ manually at any time (ignored while the calibration wizard itself is active).
 Before the wizard has ever been run (nothing saved to NVS yet), the scale is uncalibrated
 (`ScaleCalibration::default()`, `scale = 0.0`) and readings are rejected outright — the
 Dashboard shows `--` until calibration completes.
+
+#### Finished build
+
+The scale mount installed in the Mara X's drip tray, and the Dashboard showing a live weight
+reading:
+
+| ![Scale installed in the machine](../assets/docs/scale_installed.jpg) | ![3D-printed scale mount with both load cells](../assets/docs/scale_mount_3d_print.jpg) | ![Dashboard showing a live weight reading](../assets/docs/dashboard_live.jpg) |
+|:---:|:---:|:---:|
