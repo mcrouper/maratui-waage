@@ -134,6 +134,7 @@ Target board: **ESP32 Type-C** with an external **ILI9341** 240×320 TFT display
 |-------------------|---------------------------------|
 | Short             | Toggle Dashboard ↔ Graphs       |
 | Short (on loading)| Toggle display backlight        |
+| Double (fast 2x)  | Zero the scale                  |
 | Long              | Enter / exit Debug overlay      |
 | Hold (3s)         | Start the scale calibration wizard |
 
@@ -143,7 +144,8 @@ See [`hardware/`](hardware/) for the KiCad project, PCB renders, Gerber files, a
 
 Two independent HX711 amplifiers — one per drip-tray side — feed the live Weight display and
 the weight-based shot gauge. Hold the button for 3s to run the calibration wizard (tare, then a
-known reference weight, for each cell in turn); results persist to NVS. See
+known reference weight, for each cell in turn); results persist to NVS. The scale also auto-tares
+at boot and at the start of every shot; a fast double press zeroes it manually at any time. See
 [`docs/hardware.md`](docs/hardware.md) for wiring and the full calibration walkthrough.
 
 ## Security Considerations
