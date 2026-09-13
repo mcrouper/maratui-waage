@@ -62,16 +62,21 @@ pub struct ButtonState {
     /// Set once `held_for` has fired for the current press, so `update` doesn't also
     /// classify the eventual release as a Short/Long press.
     hold_consumed: bool,
-    /// When the previous Short press was released, so a fast second Short press can be
-    /// reclassified as `ButtonPressType::Double` instead of two separate Shorts.
-    last_short_release_at: Option<Instant>,
+    /// A Short press release currently on hold, waiting to see whether a second Short
+    /// follows within `DOUBLE_PRESS_WINDOW_MS` to pair into a `ButtonPressType::Double`.
+    /// A lone Short must *not* fire the moment it's released — a caller reacting to it
+    /// immediately (e.g. switching screens) would misfire on the first half of every
+    /// double press. Resolved either by pairing (in `update`) or by timing out (in `poll`,
+    /// which must be called regularly regardless of press state for this to ever fire).
+    pending_short_at: Option<Instant>,
 }
 
 impl ButtonState {
     /// Update the button state based on whether it is currently pressed.
     ///
-    /// If the button was just released, it calls the `on_press` callback with the type of press
-    /// detected. Suppressed if `held_for` already consumed this press.
+    /// A Long press (or a Short paired into a Double) calls `on_press` immediately on
+    /// release. A lone Short is held back instead — call `poll` every tick to eventually
+    /// dispatch it once the double-press window has passed without a pairing second press.
     pub fn update<F>(&mut self, is_pressed: bool, on_press: F)
     where
         F: FnOnce(ButtonPressType),
@@ -91,26 +96,37 @@ impl ButtonState {
 
             let now = Instant::now();
             let duration = now.saturating_duration_since(pressed_at).as_millis() as u64;
-            let press_type = if duration < 500 {
-                let is_double = self
-                    .last_short_release_at
-                    .take()
-                    .is_some_and(|last| {
-                        now.saturating_duration_since(last).as_millis() as u64
-                            <= DOUBLE_PRESS_WINDOW_MS
-                    });
+            if duration < 500 {
+                let is_double = self.pending_short_at.take().is_some_and(|pending| {
+                    now.saturating_duration_since(pending).as_millis() as u64
+                        <= DOUBLE_PRESS_WINDOW_MS
+                });
                 if is_double {
-                    ButtonPressType::Double
+                    on_press(ButtonPressType::Double);
                 } else {
-                    self.last_short_release_at = Some(now);
-                    ButtonPressType::Short
+                    // Hold it back; `poll` fires it as a plain Short if nothing pairs with it.
+                    self.pending_short_at = Some(now);
                 }
             } else {
-                self.last_short_release_at = None;
-                ButtonPressType::Long
-            };
+                on_press(ButtonPressType::Long);
+            }
+        }
+    }
 
-            on_press(press_type);
+    /// Dispatches a Short press that was held back by `update` once the double-press window
+    /// has elapsed without a second Short arriving to pair it into a Double. Call this every
+    /// main-loop tick, independent of the button's current pressed state — a lone Short only
+    /// ever fires from here, never from `update` itself.
+    pub fn poll<F>(&mut self, on_press: F)
+    where
+        F: FnOnce(ButtonPressType),
+    {
+        if let Some(pending) = self.pending_short_at
+            && Instant::now().saturating_duration_since(pending).as_millis() as u64
+                > DOUBLE_PRESS_WINDOW_MS
+        {
+            self.pending_short_at = None;
+            on_press(ButtonPressType::Short);
         }
     }
 
@@ -167,14 +183,31 @@ mod tests {
     }
 
     #[test]
-    fn test_button_state_short_press() {
+    fn test_button_state_short_press_is_held_back_until_poll() {
         let mut state = ButtonState::default();
         let mut received: Option<ButtonPressType> = None;
 
-        // Press
+        // Press and release: not dispatched yet from `update` — it might still pair into a
+        // Double if a second Short follows within the window.
         state.update(true, |_| {});
-        // Release immediately → short press
         state.update(false, |t| received = Some(t));
+        assert_eq!(received, None);
+
+        // Nothing paired with it, but the window hasn't elapsed yet either.
+        state.poll(|t| received = Some(t));
+        assert_eq!(received, None);
+    }
+
+    #[test]
+    #[ignore = "requires sleeping past the double-press window"]
+    fn test_button_state_lone_short_press_fires_from_poll_after_the_window() {
+        let mut state = ButtonState::default();
+        let mut received: Option<ButtonPressType> = None;
+
+        state.update(true, |_| {});
+        state.update(false, |_| {});
+        std::thread::sleep(Duration::from_millis(DOUBLE_PRESS_WINDOW_MS + 100));
+        state.poll(|t| received = Some(t));
 
         assert_eq!(received, Some(ButtonPressType::Short));
     }
@@ -190,17 +223,15 @@ mod tests {
         let mut state = ButtonState::default();
         let mut received: Vec<ButtonPressType> = Vec::new();
 
-        // First short press.
+        // First short press: held back, not dispatched.
         state.update(true, |_| {});
         state.update(false, |t| received.push(t));
-        // Second short press, immediately after (well within the double-press window).
+        // Second short press, immediately after (well within the double-press window): pairs
+        // with the first and fires immediately as a Double — no need to wait for `poll`.
         state.update(true, |_| {});
         state.update(false, |t| received.push(t));
 
-        assert_eq!(
-            received,
-            vec![ButtonPressType::Short, ButtonPressType::Double]
-        );
+        assert_eq!(received, vec![ButtonPressType::Double]);
     }
 
     #[test]
@@ -213,16 +244,10 @@ mod tests {
             state.update(false, |t| received.push(t));
         }
 
-        // Press 1+2 pair up into a Double; press 3 has nothing left to pair with, so it starts
-        // a fresh pair and is a Short on its own.
-        assert_eq!(
-            received,
-            vec![
-                ButtonPressType::Short,
-                ButtonPressType::Double,
-                ButtonPressType::Short
-            ]
-        );
+        // Press 1+2 pair up into a Double, fired immediately. Press 3 has nothing left to pair
+        // with, so it's held back the same way a lone Short always is — `poll` would eventually
+        // dispatch it, but that's covered by the poll-specific tests above.
+        assert_eq!(received, vec![ButtonPressType::Double]);
     }
 
     #[test]
@@ -232,15 +257,15 @@ mod tests {
         let mut received: Vec<ButtonPressType> = Vec::new();
 
         state.update(true, |_| {});
-        state.update(false, |t| received.push(t));
+        state.update(false, |_| {});
         std::thread::sleep(Duration::from_millis(DOUBLE_PRESS_WINDOW_MS + 100));
+        // The first Short's window has elapsed: `poll` dispatches it before the second press
+        // even starts, so the second press pairs with nothing and is held back in turn.
+        state.poll(|t| received.push(t));
         state.update(true, |_| {});
         state.update(false, |t| received.push(t));
 
-        assert_eq!(
-            received,
-            vec![ButtonPressType::Short, ButtonPressType::Short]
-        );
+        assert_eq!(received, vec![ButtonPressType::Short]);
     }
 
     #[test]

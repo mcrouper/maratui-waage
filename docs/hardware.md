@@ -60,9 +60,11 @@ Details for each subsystem below.
 
 Button connects GPIO to **GND** through a tactile switch (active LOW, NegEdge detection).
 Short press (< 500 ms): toggle Dashboard ↔ Graphs. Two short presses released within 400 ms
-of each other count as a double press instead: zero the scale (see below). Long press
-(≥ 500 ms, < 3 s): toggle Debug screen. Hold ≥ 3 s: start the scale calibration wizard (see
-below).
+of each other count as a double press instead: zero the scale (see below). Because a lone
+short press can't be told apart from the first half of a double press until that 400 ms
+window has passed without a second press, every short-press action (screen toggle, backlight
+wake) fires up to ~400 ms after release, not instantly. Long press (≥ 500 ms, < 3 s): toggle
+Debug screen. Hold ≥ 3 s: start the scale calibration wizard (see below).
 
 ### Scale (dual HX711 load-cell amplifiers)
 
