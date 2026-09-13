@@ -62,6 +62,7 @@ procedure.
 Button connects GPIO to **GND** via a tactile switch (active LOW, falling-edge detection).
 
 - Short press (< 500 ms): cycle screens (Dashboard ↔ Graphs)
+- Double press (two short presses within 400 ms): zero the scale
 - Long press (≥ 500 ms): toggle Debug screen
 - Hold (3 s): start the scale calibration wizard
 

@@ -36,8 +36,7 @@ impl AppStateMachine {
                 state.error = None;
                 // Tare out whatever is currently on the scale (e.g. the empty cup) so the
                 // Dashboard shows net extracted weight for this shot.
-                state.scale_tare_dg = state.last_raw_weight_dg.unwrap_or(0);
-                state.weight_dg = Some(0);
+                Self::tare_scale(state);
             }
 
             AppEvent::ShotEnded { duration } => {
@@ -166,6 +165,12 @@ impl AppStateMachine {
             }
 
             AppEvent::WeightUpdated { weight_dg } => {
+                if state.last_raw_weight_dg.is_none() {
+                    // First reading since boot: tare immediately so the Dashboard starts at
+                    // 0g instead of showing whatever residual raw drift happens to be on the
+                    // scale (e.g. the portafilter, or just calibration offset error).
+                    state.scale_tare_dg = weight_dg;
+                }
                 state.last_raw_weight_dg = Some(weight_dg);
                 state.weight_dg = Some(weight_dg - state.scale_tare_dg);
             }
@@ -245,6 +250,8 @@ impl AppStateMachine {
                 Button::Button1(ButtonPressType::Long) => {
                     Self::handle_event(state, AppEvent::CalibrationCancel);
                 }
+                // Double press has no meaning inside the wizard; ignore it.
+                Button::Button1(ButtonPressType::Double) => {}
             }
             return;
         }
@@ -252,6 +259,13 @@ impl AppStateMachine {
         // Long press always toggles Debug, even during loading.
         if let Button::Button1(ButtonPressType::Long) = button {
             Self::handle_event(state, AppEvent::DebugScreen);
+            return;
+        }
+
+        // Double press manually zeros the scale, regardless of screen — a quick way to tare
+        // without waiting for a shot to start.
+        if let Button::Button1(ButtonPressType::Double) = button {
+            Self::tare_scale(state);
             return;
         }
 
@@ -279,6 +293,14 @@ impl AppStateMachine {
         {
             Self::handle_event(state, AppEvent::NextScreen);
         }
+    }
+
+    /// Zero the scale: tare both cells against whatever they're currently reading, so the
+    /// Dashboard's weight display resets to 0 g. Shared by the shot-start auto-tare and the
+    /// manual double-press-to-zero gesture.
+    fn tare_scale(state: &mut GlobalAppState) {
+        state.scale_tare_dg = state.last_raw_weight_dg.unwrap_or(0);
+        state.weight_dg = Some(0);
     }
 
     /// Handle telemetry frame updates
@@ -540,6 +562,54 @@ mod tests {
     }
 
     #[test]
+    fn test_double_press_zeroes_the_scale() {
+        let mut state = GlobalAppState::default();
+        state.machine_state.last_frame = Some(TelemetryFrame::debug_frame());
+        state.last_activity_at = Some(Instant::now());
+        // First reading since boot is auto-tared to zero; load the scale afterwards so there's
+        // something non-zero on screen for the double press to zero back out.
+        AppStateMachine::handle_event(&mut state, AppEvent::WeightUpdated { weight_dg: 100 });
+        AppStateMachine::handle_event(&mut state, AppEvent::WeightUpdated { weight_dg: 1334 });
+        assert_eq!(state.weight_dg, Some(1234));
+
+        AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Double));
+
+        assert_eq!(state.scale_tare_dg, 1334);
+        assert_eq!(state.weight_dg, Some(0));
+    }
+
+    #[test]
+    fn test_double_press_zeroes_the_scale_even_before_telemetry_or_backlight_wake() {
+        let mut state = GlobalAppState::default();
+        // No telemetry yet, and the backlight has timed out — both would block a Short press,
+        // but zeroing the scale is a physical action that should always work.
+        assert!(state.machine_state.last_frame.is_none());
+        state.last_activity_at = Some(Instant::now() - BACKLIGHT_TIMEOUT - Duration::from_secs(1));
+        AppStateMachine::handle_event(&mut state, AppEvent::WeightUpdated { weight_dg: 100 });
+        AppStateMachine::handle_event(&mut state, AppEvent::WeightUpdated { weight_dg: 600 });
+        assert_eq!(state.weight_dg, Some(500));
+
+        AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Double));
+
+        assert_eq!(state.scale_tare_dg, 600);
+        assert_eq!(state.weight_dg, Some(0));
+    }
+
+    #[test]
+    fn test_double_press_is_ignored_during_calibration_wizard() {
+        let mut state = GlobalAppState::default();
+        state.machine_state.last_frame = Some(TelemetryFrame::debug_frame());
+        AppStateMachine::handle_event(&mut state, AppEvent::WeightUpdated { weight_dg: 999 });
+        AppStateMachine::handle_event(&mut state, AppEvent::StartCalibration);
+        let tare_before = state.scale_tare_dg;
+
+        AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Double));
+
+        // Unchanged: a double press must not interfere with the wizard's own confirm/cancel flow.
+        assert_eq!(state.scale_tare_dg, tare_before);
+    }
+
+    #[test]
     fn test_telemetry_resume_starts_new_session() {
         let mut state = GlobalAppState::default();
         let t0 = Instant::now();
@@ -618,6 +688,46 @@ mod tests {
         AppStateMachine::handle_event(&mut state, AppEvent::ShotStarted);
 
         assert!(!state.has_error());
+    }
+
+    #[test]
+    fn test_first_weight_reading_since_boot_is_tared_to_zero() {
+        let mut state = GlobalAppState::default();
+
+        // Whatever is on the scale at boot (residual raw drift, an empty portafilter, ...)
+        // becomes the zero point immediately, rather than showing as a nonzero weight until
+        // the first shot starts.
+        AppStateMachine::handle_event(&mut state, AppEvent::WeightUpdated { weight_dg: 1234 });
+
+        assert_eq!(state.weight_dg, Some(0));
+        assert_eq!(state.scale_tare_dg, 1234);
+    }
+
+    #[test]
+    fn test_subsequent_weight_readings_use_the_boot_tare() {
+        let mut state = GlobalAppState::default();
+
+        AppStateMachine::handle_event(&mut state, AppEvent::WeightUpdated { weight_dg: 1000 });
+        AppStateMachine::handle_event(&mut state, AppEvent::WeightUpdated { weight_dg: 1500 });
+
+        // Tare stays at the first reading; later readings are net of it.
+        assert_eq!(state.weight_dg, Some(500));
+        assert_eq!(state.scale_tare_dg, 1000);
+    }
+
+    #[test]
+    fn test_shot_started_retares_on_top_of_the_boot_tare() {
+        let mut state = GlobalAppState::default();
+
+        // Boot tare from residual drift.
+        AppStateMachine::handle_event(&mut state, AppEvent::WeightUpdated { weight_dg: 1000 });
+        // Cup placed on the scale before the shot starts.
+        AppStateMachine::handle_event(&mut state, AppEvent::WeightUpdated { weight_dg: 1300 });
+        assert_eq!(state.weight_dg, Some(300));
+
+        AppStateMachine::handle_event(&mut state, AppEvent::ShotStarted);
+        assert_eq!(state.weight_dg, Some(0));
+        assert_eq!(state.scale_tare_dg, 1300);
     }
 
     #[test]

@@ -161,6 +161,11 @@ fn run_app_simulator(mut app: impl MaraUiApp) {
                         Keycode::D => {
                             app.handle_press(Button::Button1(ButtonPressType::Long));
                         }
+                        Keycode::Z => {
+                            // Fast double-press on real hardware; the simulator has no button
+                            // timing to replicate, so inject the Double press type directly.
+                            app.handle_press(Button::Button1(ButtonPressType::Double));
+                        }
                         _ => {}
                     }
                 }

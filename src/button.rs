@@ -1,11 +1,13 @@
 use core::fmt;
 use std::time::{Duration, Instant};
 
-/// Type of button press: short or long.
+/// Type of button press: short, long, or a fast double short-press.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ButtonPressType {
     Short,
     Long,
+    /// Two Short presses released in quick succession (see `DOUBLE_PRESS_WINDOW_MS`).
+    Double,
 }
 
 impl fmt::Display for ButtonPressType {
@@ -13,6 +15,7 @@ impl fmt::Display for ButtonPressType {
         match self {
             ButtonPressType::Short => write!(f, "Short Press"),
             ButtonPressType::Long => write!(f, "Long Press"),
+            ButtonPressType::Double => write!(f, "Double Press"),
         }
     }
 }
@@ -41,7 +44,16 @@ impl Button {
     pub fn is_long_press(&self) -> bool {
         matches!(self, Button::Button1(ButtonPressType::Long))
     }
+
+    /// Check if a fast double press was detected.
+    pub fn is_double_press(&self) -> bool {
+        matches!(self, Button::Button1(ButtonPressType::Double))
+    }
 }
+
+/// Maximum gap between the release of one Short press and the release of the next for the
+/// pair to be reclassified as a single `ButtonPressType::Double`.
+const DOUBLE_PRESS_WINDOW_MS: u64 = 400;
 
 /// State of a button, tracking press duration.
 #[derive(Default)]
@@ -50,6 +62,9 @@ pub struct ButtonState {
     /// Set once `held_for` has fired for the current press, so `update` doesn't also
     /// classify the eventual release as a Short/Long press.
     hold_consumed: bool,
+    /// When the previous Short press was released, so a fast second Short press can be
+    /// reclassified as `ButtonPressType::Double` instead of two separate Shorts.
+    last_short_release_at: Option<Instant>,
 }
 
 impl ButtonState {
@@ -74,16 +89,28 @@ impl ButtonState {
                 return;
             }
 
-            let duration = pressed_at.elapsed().as_millis() as u64;
+            let now = Instant::now();
+            let duration = now.saturating_duration_since(pressed_at).as_millis() as u64;
             let press_type = if duration < 500 {
-                Some(ButtonPressType::Short)
+                let is_double = self
+                    .last_short_release_at
+                    .take()
+                    .is_some_and(|last| {
+                        now.saturating_duration_since(last).as_millis() as u64
+                            <= DOUBLE_PRESS_WINDOW_MS
+                    });
+                if is_double {
+                    ButtonPressType::Double
+                } else {
+                    self.last_short_release_at = Some(now);
+                    ButtonPressType::Short
+                }
             } else {
-                Some(ButtonPressType::Long)
+                self.last_short_release_at = None;
+                ButtonPressType::Long
             };
 
-            if let Some(press_type) = press_type {
-                on_press(press_type);
-            }
+            on_press(press_type);
         }
     }
 
@@ -150,6 +177,70 @@ mod tests {
         state.update(false, |t| received = Some(t));
 
         assert_eq!(received, Some(ButtonPressType::Short));
+    }
+
+    #[test]
+    fn test_button_is_double_press() {
+        assert!(Button::Button1(ButtonPressType::Double).is_double_press());
+        assert!(!Button::Button1(ButtonPressType::Short).is_double_press());
+    }
+
+    #[test]
+    fn test_button_state_fast_second_short_press_is_a_double() {
+        let mut state = ButtonState::default();
+        let mut received: Vec<ButtonPressType> = Vec::new();
+
+        // First short press.
+        state.update(true, |_| {});
+        state.update(false, |t| received.push(t));
+        // Second short press, immediately after (well within the double-press window).
+        state.update(true, |_| {});
+        state.update(false, |t| received.push(t));
+
+        assert_eq!(
+            received,
+            vec![ButtonPressType::Short, ButtonPressType::Double]
+        );
+    }
+
+    #[test]
+    fn test_button_state_a_third_fast_press_starts_a_new_double_press_pair() {
+        let mut state = ButtonState::default();
+        let mut received: Vec<ButtonPressType> = Vec::new();
+
+        for _ in 0..3 {
+            state.update(true, |_| {});
+            state.update(false, |t| received.push(t));
+        }
+
+        // Press 1+2 pair up into a Double; press 3 has nothing left to pair with, so it starts
+        // a fresh pair and is a Short on its own.
+        assert_eq!(
+            received,
+            vec![
+                ButtonPressType::Short,
+                ButtonPressType::Double,
+                ButtonPressType::Short
+            ]
+        );
+    }
+
+    #[test]
+    #[ignore = "requires sleeping past the double-press window"]
+    fn test_button_state_slow_second_short_press_stays_two_shorts() {
+        let mut state = ButtonState::default();
+        let mut received: Vec<ButtonPressType> = Vec::new();
+
+        state.update(true, |_| {});
+        state.update(false, |t| received.push(t));
+        std::thread::sleep(Duration::from_millis(DOUBLE_PRESS_WINDOW_MS + 100));
+        state.update(true, |_| {});
+        state.update(false, |t| received.push(t));
+
+        assert_eq!(
+            received,
+            vec![ButtonPressType::Short, ButtonPressType::Short]
+        );
     }
 
     #[test]
