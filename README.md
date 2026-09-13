@@ -148,6 +148,9 @@ known reference weight, for each cell in turn); results persist to NVS. The scal
 at boot and at the start of every shot; a fast double press zeroes it manually at any time. See
 [`docs/hardware.md`](docs/hardware.md) for wiring and the full calibration walkthrough.
 
+| ![Scale installed in the machine](assets/docs/scale_installed.jpg) | ![3D-printed scale mount with both load cells](assets/docs/scale_mount_3d_print.jpg) | ![Dashboard showing a live weight reading](assets/docs/dashboard_live.jpg) |
+|:---:|:---:|:---:|
+
 ## Security Considerations
 
 - **Credentials in flash** — Wi-Fi and MQTT credentials are embedded at compile time and extractable from the flash image with standard tools (`strings`, `binwalk`). Rotate if the device is shared.
