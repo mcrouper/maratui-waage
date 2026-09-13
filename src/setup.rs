@@ -240,6 +240,12 @@ fn run_app_hardware(mut app: impl MaraUiApp) {
         button1_state.update(button1.is_low(), |press_type| {
             app.handle_press(Button::Button1(press_type));
         });
+        // Dispatches a lone Short press once the double-press window has passed with no
+        // second press to pair it into a Double — must be polled every tick, not just on
+        // release, since the window can elapse with the button not currently pressed.
+        button1_state.poll(|press_type| {
+            app.handle_press(Button::Button1(press_type));
+        });
 
         // Holding Button1 for 3s (while not already in the wizard) starts scale calibration.
         if button1_state.held_for(button1.is_low(), CALIBRATION_HOLD_DURATION) {
