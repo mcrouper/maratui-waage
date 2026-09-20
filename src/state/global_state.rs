@@ -15,6 +15,10 @@ pub const BACKLIGHT_TIMEOUT: Duration = Duration::from_secs(10);
 /// the next frame to arrive starts a fresh session (terminal + graph buffers cleared).
 pub const MACHINE_OFFLINE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Rolling window size for `GlobalAppState::flow_samples`, matching the existing 300-point
+/// convention used by `MachineState`'s temperature graph buffers.
+const FLOW_SAMPLES_CAP: usize = 300;
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum ConnectionStatus {
     Disabled,
@@ -191,6 +195,11 @@ pub struct GlobalAppState {
     /// Latest raw (uncalibrated) HX711 ADC count from the right cell. Only populated by the
     /// `scale-test` build variant.
     pub raw_weight_right: Option<i32>,
+    /// Rolling `(elapsed_secs_since_shot_start, weight_dg)` samples captured while a shot is
+    /// extracting, used to compute and render the live flow rate. Cleared on `ShotStarted`;
+    /// left as-is once the shot ends, so the Dashboard keeps showing that shot's flow profile
+    /// until the next one starts.
+    pub flow_samples: VecDeque<(f32, i32)>,
 }
 
 impl Default for GlobalAppState {
@@ -222,6 +231,7 @@ impl Default for GlobalAppState {
             screen_before_calibration: None,
             raw_weight_left: None,
             raw_weight_right: None,
+            flow_samples: VecDeque::with_capacity(FLOW_SAMPLES_CAP),
         }
     }
 }
@@ -248,6 +258,37 @@ impl GlobalAppState {
     /// Clear the error
     pub fn clear_error(&mut self) {
         self.error = None;
+    }
+
+    /// Record a flow sample at `elapsed_s` seconds into the current shot, using the current
+    /// `weight_dg`. No-op if the scale hasn't reported a weight yet.
+    pub fn record_flow_sample(&mut self, elapsed_s: f32) {
+        let Some(weight_dg) = self.weight_dg else {
+            return;
+        };
+        self.flow_samples.push_back((elapsed_s, weight_dg));
+        if self.flow_samples.len() > FLOW_SAMPLES_CAP {
+            self.flow_samples.pop_front();
+        }
+    }
+
+    /// Discard all recorded flow samples (called on `ShotStarted` so a new shot starts clean).
+    pub fn clear_flow_samples(&mut self) {
+        self.flow_samples.clear();
+    }
+
+    /// Live flow rate in g/s, averaged across the whole recorded sample window. `None` until
+    /// at least two samples spanning a nontrivial time delta have been collected, so a couple
+    /// of readings a few milliseconds apart can't produce a wildly inflated rate.
+    pub fn flow_rate_g_per_s(&self) -> Option<f64> {
+        let &(t0, w0) = self.flow_samples.front()?;
+        let &(t1, w1) = self.flow_samples.back()?;
+        let dt = (t1 - t0) as f64;
+        if dt < 0.5 {
+            return None;
+        }
+        let dw_g = (w1 - w0) as f64 / 10.0;
+        Some((dw_g / dt).max(0.0))
     }
 
     pub fn enqueue_mqtt_message(
@@ -388,6 +429,46 @@ mod tests {
 
         state.clear_error();
         assert!(!state.has_error());
+    }
+
+    #[test]
+    fn test_flow_rate_requires_at_least_two_samples_spanning_half_a_second() {
+        let mut state = GlobalAppState::default();
+        assert_eq!(state.flow_rate_g_per_s(), None);
+
+        state.weight_dg = Some(50);
+        state.record_flow_sample(0.0);
+        assert_eq!(state.flow_rate_g_per_s(), None);
+
+        // Same instant twice (dt == 0) must not be treated as an infinite rate.
+        state.record_flow_sample(0.0);
+        assert_eq!(state.flow_rate_g_per_s(), None);
+    }
+
+    #[test]
+    fn test_flow_rate_averages_over_the_full_recorded_window() {
+        let mut state = GlobalAppState::default();
+        state.weight_dg = Some(0);
+        state.record_flow_sample(0.0);
+        state.weight_dg = Some(50); // +5.0g
+        state.record_flow_sample(1.0);
+        state.weight_dg = Some(150); // +10.0g more, but 2s elapsed this leg
+        state.record_flow_sample(3.0);
+
+        // Total: 15.0g over 3.0s = 5.0 g/s, regardless of the uneven step sizes in between.
+        assert_eq!(state.flow_rate_g_per_s(), Some(5.0));
+    }
+
+    #[test]
+    fn test_clear_flow_samples() {
+        let mut state = GlobalAppState::default();
+        state.weight_dg = Some(10);
+        state.record_flow_sample(0.0);
+        state.record_flow_sample(1.0);
+        assert!(!state.flow_samples.is_empty());
+
+        state.clear_flow_samples();
+        assert!(state.flow_samples.is_empty());
     }
 
     #[test]

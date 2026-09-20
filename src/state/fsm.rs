@@ -34,6 +34,7 @@ impl AppStateMachine {
                     started_at: Instant::now(),
                 };
                 state.error = None;
+                state.clear_flow_samples();
                 // Tare out whatever is currently on the scale (e.g. the empty cup) so the
                 // Dashboard shows net extracted weight for this shot.
                 Self::tare_scale(state);
@@ -173,6 +174,9 @@ impl AppStateMachine {
                 }
                 state.last_raw_weight_dg = Some(weight_dg);
                 state.weight_dg = Some(weight_dg - state.scale_tare_dg);
+                if let Some(elapsed) = state.extraction_state.elapsed() {
+                    state.record_flow_sample(elapsed.as_secs_f32());
+                }
             }
 
             AppEvent::RawWeightUpdated { left, right } => {
@@ -576,6 +580,32 @@ mod tests {
 
         assert_eq!(state.scale_tare_dg, 1334);
         assert_eq!(state.weight_dg, Some(0));
+    }
+
+    #[test]
+    fn test_weight_updates_are_not_recorded_as_flow_samples_outside_a_shot() {
+        let mut state = GlobalAppState::default();
+        AppStateMachine::handle_event(&mut state, AppEvent::WeightUpdated { weight_dg: 100 });
+        AppStateMachine::handle_event(&mut state, AppEvent::WeightUpdated { weight_dg: 500 });
+
+        assert!(state.flow_samples.is_empty());
+    }
+
+    #[test]
+    fn test_shot_started_clears_flow_samples_and_weight_updates_are_recorded_during_a_shot() {
+        let mut state = GlobalAppState::default();
+        AppStateMachine::handle_event(&mut state, AppEvent::WeightUpdated { weight_dg: 0 });
+        AppStateMachine::handle_event(&mut state, AppEvent::ShotStarted);
+        assert!(state.flow_samples.is_empty());
+
+        AppStateMachine::handle_event(&mut state, AppEvent::WeightUpdated { weight_dg: 100 });
+        AppStateMachine::handle_event(&mut state, AppEvent::WeightUpdated { weight_dg: 300 });
+
+        assert_eq!(state.flow_samples.len(), 2);
+
+        // Starting a new shot drops the previous one's samples.
+        AppStateMachine::handle_event(&mut state, AppEvent::ShotStarted);
+        assert!(state.flow_samples.is_empty());
     }
 
     #[test]
