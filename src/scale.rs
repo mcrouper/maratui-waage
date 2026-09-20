@@ -18,7 +18,7 @@ pub struct ScaleCalibration {
     pub scale: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct DualScaleCalibration {
     pub left: ScaleCalibration,
     pub right: ScaleCalibration,
@@ -30,15 +30,6 @@ impl Default for ScaleCalibration {
         Self {
             offset: 0,
             scale: 0.0,
-        }
-    }
-}
-
-impl Default for DualScaleCalibration {
-    fn default() -> Self {
-        Self {
-            left: ScaleCalibration::default(),
-            right: ScaleCalibration::default(),
         }
     }
 }
