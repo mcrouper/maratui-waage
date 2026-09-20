@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use ratatui::Frame;
@@ -28,6 +29,10 @@ const HX_SCALE_MIN: f64 = 60.0;
 const HX_SCALE_MAX: f64 = 110.0;
 const HX_IDEAL_LOW: f64 = 90.0;
 const HX_IDEAL_HIGH: f64 = 95.0;
+// Flow readout carved off the top of the shot gauge column: one row for the numeric g/s
+// value, one row for the trend glyphs.
+const FLOW_INFO_ROWS: u16 = 2;
+const FLOW_TREND_MAX_G_PER_S: f64 = 6.0;
 
 #[derive(Default)]
 pub struct Dashboard;
@@ -184,10 +189,47 @@ fn render_info_col(t_frame: &TelemetryFrame, area: Rect, buf: &mut Buffer) {
     .render(status_area, buf);
 }
 
+/// Continuous blue → cyan → green → yellow → red gradient driven by a `0.0..=1.0` ratio, so
+/// the temperature gauges use the display's actual RGB565 color range instead of a handful of
+/// hard-banded named colors. Green sits at the midpoint, matching how the HX and boiler ratios
+/// below are scaled so their "ideal" zones land close to it.
+fn heat_gradient_color(ratio: f64) -> Color {
+    const STOPS: [(f64, (u8, u8, u8)); 5] = [
+        (0.0, (70, 110, 230)),  // cold - blue
+        (0.25, (70, 200, 225)), // cool - cyan
+        (0.5, (80, 200, 90)),   // ideal - green
+        (0.75, (230, 195, 60)), // warm - yellow
+        (1.0, (220, 60, 50)),   // hot - red
+    ];
+
+    let t = ratio.clamp(0.0, 1.0);
+    let mut lo = STOPS[0];
+    let mut hi = STOPS[STOPS.len() - 1];
+    for pair in STOPS.windows(2) {
+        if t >= pair[0].0 && t <= pair[1].0 {
+            lo = pair[0];
+            hi = pair[1];
+            break;
+        }
+    }
+
+    let span = (hi.0 - lo.0).max(f64::EPSILON);
+    let local_t = ((t - lo.0) / span).clamp(0.0, 1.0);
+    let lerp = |a: u8, b: u8| -> u8 { (a as f64 + (b as f64 - a as f64) * local_t).round() as u8 };
+
+    Color::Rgb(
+        lerp(lo.1.0, hi.1.0),
+        lerp(lo.1.1, hi.1.1),
+        lerp(lo.1.2, hi.1.2),
+    )
+}
+
 /// Full-width vertical gauge for HX temperature.
 ///
-/// Scale 60–110°C. Ideal zone 90–95°C is marked with `▒` even when unfilled.
-/// Colors: white (cold) → green (ideal 88–95°) → yellow (95–100°) → red (>100°).
+/// Scale 60–110°C. Ideal zone 90–95°C is marked with `▒` even when unfilled. The filled
+/// portion is a fixed thermometer-style gradient (blue at the 60° floor through red at the
+/// 110° ceiling) rather than a single flat color, so the bar itself communicates the whole
+/// scale at a glance, not just wherever the current reading happens to sit.
 fn render_hx_vgauge(temp: u16, area: Rect, buf: &mut Buffer) {
     let total = area.height as usize;
     if total == 0 || area.width == 0 {
@@ -205,13 +247,6 @@ fn render_hx_vgauge(temp: u16, area: Rect, buf: &mut Buffer) {
     let ideal_top_row = temp_to_row(HX_IDEAL_HIGH);
     let ideal_bot_row = temp_to_row(HX_IDEAL_LOW);
 
-    let fill_style = match temp {
-        0..=87 => STYLE_WHITE,
-        88..=95 => STYLE_GREEN,
-        96..=100 => STYLE_YELLOW,
-        _ => STYLE_RED,
-    };
-
     let w = area.width as usize;
     let fill = "█".repeat(w);
     let empty = "░".repeat(w);
@@ -223,7 +258,13 @@ fn render_hx_vgauge(temp: u16, area: Rect, buf: &mut Buffer) {
         let in_ideal = row >= ideal_top_row && row < ideal_bot_row;
 
         let (s, style) = if is_filled {
-            (fill.as_str(), fill_style)
+            // Row's fixed position in the 60-110° scale, not the current reading — bottom row
+            // is coldest (ratio 0), top row is the scale ceiling (ratio 1).
+            let row_ratio = 1.0 - (row as f64 / total.max(1) as f64);
+            (
+                fill.as_str(),
+                Style::new().fg(heat_gradient_color(row_ratio)),
+            )
         } else if in_ideal {
             (ideal.as_str(), STYLE_GREEN)
         } else {
@@ -234,10 +275,35 @@ fn render_hx_vgauge(temp: u16, area: Rect, buf: &mut Buffer) {
     }
 }
 
+/// Maps a boiler temperature to the same `0.0..=1.0` ratio `heat_gradient_color` expects,
+/// piecewise-remapped around `target` so the gradient's green midpoint lands at the existing
+/// "ready" boundary (90% of target) and its red end lands at a 15% overshoot — keeping the
+/// same warming/ready/overheating semantics the old two-tone fill had, just continuous now.
+fn boiler_gradient_ratio(temp: f64, target: u16) -> f64 {
+    const READY_FRAC: f64 = 0.9;
+    const OVERSHOOT_FRAC: f64 = 1.15;
+
+    let target = target as f64;
+    if target <= 0.0 {
+        return 0.0;
+    }
+    let t = temp / target;
+    if t <= READY_FRAC {
+        (t / READY_FRAC) * 0.5
+    } else {
+        let over = (t - READY_FRAC) / (OVERSHOOT_FRAC - READY_FRAC);
+        0.5 + over.min(1.0) * 0.5
+    }
+}
+
 /// Custom boiler bar with absolute temperature scale, color zones, and target marker.
 ///
 /// Visual:  label | ████████████░░░│────────── |
 ///                  warm     ready  ^target
+///
+/// The filled portion is a fixed positional gradient (blue → cyan → green at the ready
+/// boundary → yellow → red past target), not a single color tied to the current reading, so
+/// the bar reads like a thermometer scale rather than a two-tone flag.
 fn render_boiler_gauge(t_frame: &TelemetryFrame, area: Rect, buf: &mut Buffer) {
     let block = Block::bordered()
         .title("Boiler")
@@ -279,18 +345,15 @@ fn render_boiler_gauge(t_frame: &TelemetryFrame, area: Rect, buf: &mut Buffer) {
     };
     let current_pos = pos_of(now).min(bar_w);
     let target_pos = pos_of(target).min(bar_w.saturating_sub(1));
-    // Ready zone starts at 90% of target temperature
-    let ready_pos = pos_of((target as f64 * 0.9) as u16);
 
     for i in 0..bar_w {
         let x = bar_x + i as u16;
         let (ch, style) = if i < current_pos {
-            // Filled portion — two-tone: warming → ready
-            if i >= ready_pos {
-                ("█", STYLE_GREEN)
-            } else {
-                ("█", STYLE_YELLOW)
-            }
+            // Filled portion — gradient by this column's position on the 0..BOILER_SCALE_MAX
+            // scale, not the current reading, so the bar itself is a fixed thermometer strip.
+            let col_temp = (i as f64 / bar_w as f64) * BOILER_SCALE_MAX as f64;
+            let ratio = boiler_gradient_ratio(col_temp, target);
+            ("█", Style::new().fg(heat_gradient_color(ratio)))
         } else if i == target_pos {
             // Target marker (current hasn't reached it yet)
             ("│", STYLE_WHITE)
@@ -318,23 +381,101 @@ fn render_shot_gauge(state: &GlobalAppState, area: Rect, buf: &mut Buffer) {
         return;
     }
 
-    let total = inner.height as usize;
+    let [flow_area, bar_area] =
+        Layout::vertical([Constraint::Length(FLOW_INFO_ROWS), Constraint::Fill(1)]).areas(inner);
+    render_flow_info(state, flow_area, buf);
+
+    let total = bar_area.height as usize;
     let weight_dg = state.weight_dg.unwrap_or(0).max(0);
     let ratio = (weight_dg as f64 / WEIGHT_GAUGE_MAX_DG as f64).min(1.0);
     let filled = (ratio * total as f64).round() as usize;
     let fill_style = shot_style(extraction_secs, state.extraction_state.is_extracting());
-    let fill: String = "█".repeat(inner.width as usize);
-    let empty: String = "░".repeat(inner.width as usize);
+    let fill: String = "█".repeat(bar_area.width as usize);
+    let empty: String = "░".repeat(bar_area.width as usize);
 
     for row in 0..total {
-        let y = inner.y + row as u16;
+        let y = bar_area.y + row as u16;
         let is_filled = row >= total.saturating_sub(filled);
         if is_filled {
-            buf.set_string(inner.x, y, &fill, fill_style);
+            buf.set_string(bar_area.x, y, &fill, fill_style);
         } else {
-            buf.set_string(inner.x, y, &empty, STYLE_DARK_GRAY);
+            buf.set_string(bar_area.x, y, &empty, STYLE_DARK_GRAY);
         }
     }
+}
+
+/// Live flow-rate readout above the shot gauge bar: a numeric g/s value and, directly below
+/// it, a compact trend strip resampled from the whole recorded flow-sample window (so it shows
+/// this shot's flow profile so far, not just the last second or two). Uses only glyphs already
+/// proven on the embedded font elsewhere on this screen (█ ▒ ░), no new Unicode ranges.
+fn render_flow_info(state: &GlobalAppState, area: Rect, buf: &mut Buffer) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+
+    let label = match state.flow_rate_g_per_s() {
+        Some(rate) => format!("{rate:.1}g/s"),
+        None => "--g/s".to_string(),
+    };
+    let label_area = Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: 1,
+    };
+    Paragraph::new(Line::from(label))
+        .centered()
+        .style(STYLE_CYAN)
+        .render(label_area, buf);
+
+    if area.height < FLOW_INFO_ROWS {
+        return;
+    }
+    let trend = flow_trend_glyphs(&state.flow_samples, area.width as usize);
+    buf.set_string(area.x, area.y + 1, &trend, STYLE_CYAN);
+}
+
+/// Resamples `flow_samples` into exactly `width` glyphs spanning the whole recorded window,
+/// each shaded by that segment's flow rate relative to `FLOW_TREND_MAX_G_PER_S`. Fewer than 2
+/// samples (nothing to compute a rate from yet) renders as all-empty. Uses integer bucket
+/// bounds (not float steps) so there's no accumulated rounding drift across buckets.
+fn flow_trend_glyphs(flow_samples: &VecDeque<(f32, i32)>, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    if flow_samples.len() < 2 {
+        return "░".repeat(width);
+    }
+
+    let samples: Vec<(f32, i32)> = flow_samples.iter().copied().collect();
+    let last_idx = samples.len() - 1;
+
+    let mut glyphs = String::with_capacity(width);
+    for i in 0..width {
+        let idx0 = (i * last_idx) / width;
+        // At least one sample apart (so dt is never 0), clamped back into bounds.
+        let idx1 = ((i + 1) * last_idx / width).max(idx0 + 1).min(last_idx);
+        let idx0 = idx0.min(idx1.saturating_sub(1));
+
+        let (t0, w0) = samples[idx0];
+        let (t1, w1) = samples[idx1];
+        let dt = (t1 - t0) as f64;
+        let rate = if dt > 0.0 {
+            ((w1 - w0) as f64 / 10.0 / dt).max(0.0)
+        } else {
+            0.0
+        };
+
+        let level = (rate / FLOW_TREND_MAX_G_PER_S).clamp(0.0, 1.0);
+        glyphs.push(if level > 0.66 {
+            '█'
+        } else if level > 0.33 {
+            '▒'
+        } else {
+            '░'
+        });
+    }
+    glyphs
 }
 
 fn render_timer(state: &GlobalAppState, area: Rect, frame: &mut Frame) {
