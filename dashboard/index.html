@@ -222,7 +222,8 @@ dl.kv dd { margin: 0; text-align: right; }
         <div class="card-head">
           <h2>Shot-Kurve</h2>
           <div class="legend">
-            <span><i style="background:var(--weight)"></i>aktueller / letzter Shot</span>
+            <span><i style="background:var(--weight)"></i>Gewicht (links)</span>
+            <span><i style="background:var(--hx);opacity:.6"></i>HX-Temperatur (rechts)</span>
             <span><i style="background:var(--target)"></i>vorherige Shots</span>
           </div>
         </div>
@@ -232,11 +233,11 @@ dl.kv dd { margin: 0; text-align: right; }
 
     <div class="stack">
       <section class="card">
-        <div class="card-head"><h2>Letzte Shots</h2></div>
+        <div class="card-head"><h2>Letzte 10 Shots</h2></div>
         <div class="scroll">
           <table>
             <thead><tr><th>Zeit</th><th class="r">Dauer</th><th class="r">Gewicht</th><th class="r">Fluss</th></tr></thead>
-            <tbody id="shotRows"><tr><td colspan="4" class="muted">Noch keine Shots seit Node-RED-Start</td></tr></tbody>
+            <tbody id="shotRows"><tr><td colspan="4" class="muted">Noch keine Shots gespeichert</td></tr></tbody>
           </table>
         </div>
       </section>
@@ -381,7 +382,7 @@ dl.kv dd { margin: 0; text-align: right; }
       return "<tr><td>" + dayClock(s.ts) + (s.aborted ? " <span class='muted'>· kurz</span>" : "") + "</td><td class='r num'>" + s.duration + " s</td><td class='r num'>" +
         (s.weight_g != null ? fmt1(s.weight_g) + " g" : "–") + "</td><td class='r num muted'>" + flow + "</td></tr>";
     });
-    $("shotRows").innerHTML = rows.length ? rows.join("") : "<tr><td colspan='4' class='muted'>Noch keine Shots seit Node-RED-Start</td></tr>";
+    $("shotRows").innerHTML = rows.length ? rows.join("") : "<tr><td colspan='4' class='muted'>Noch keine Shots gespeichert</td></tr>";
     var ev = S.events.slice(0, 12).map(function (e) {
       return "<li><time class='num'>" + clockS(e.ts) + "</time><span>" + esc(eventText(e)) + "</span></li>";
     });
@@ -492,6 +493,15 @@ dl.kv dd { margin: 0; text-align: right; }
     c.svg.onpointerleave = function () { cross.setAttribute("visibility", "hidden"); tip.style.display = "none"; };
   }
 
+  // HX samples [s, °C] of a shot; shots recorded before HX was stored fall back to the
+  // temperature history, as long as it still covers them
+  function shotHx(s) {
+    if (s.hx && s.hx.length) return s.hx;
+    var start = s.start || s.ts, end = start + ((s.duration != null ? s.duration : (serverNow() - start) / 1000) + 1) * 1000;
+    return S.hist.filter(function (r) { return r[0] >= start && r[0] <= end && typeof r[3] === "number"; })
+      .map(function (r) { return [(r[0] - start) / 1000, r[3]]; });
+  }
+
   function renderShotChart() {
     var box = $("shotChart"), tip = box.querySelector(".tip");
     // The latest pump run (running or finished, short or not) stays up until the next one starts
@@ -501,6 +511,7 @@ dl.kv dd { margin: 0; text-align: right; }
     box.querySelector(".empty").style.display = cur ? "none" : "grid";
     var c = setup(box);
     if (!cur) return;
+    c.m.r = 40; // room for the HX °C axis on the right
     var maxT = 30, maxG = 20;
     [cur].concat(prev).forEach(function (s) { s.curve.forEach(function (p) { maxT = Math.max(maxT, p[0]); maxG = Math.max(maxG, p[1]); }); });
     if (cur && !cur.end) maxT = Math.max(maxT, (serverNow() - cur.start) / 1000);
@@ -508,6 +519,22 @@ dl.kv dd { margin: 0; text-align: right; }
     var xs = function (t) { return c.m.l + t / maxT * (c.W - c.m.l - c.m.r); };
     var ys = function (g) { return c.m.t + (1 - g / maxG) * (c.H - c.m.t - c.m.b); };
     axes(c, xs, ys, niceTicks(0, maxT, 6), niceTicks(0, maxG, 5), function (v) { return v + " s"; }, function (v) { return v + " g"; });
+
+    // HX temperature behind the weight curve, on its own °C scale on the right
+    var hx = shotHx(cur), yh = null;
+    if (hx.length) {
+      var hLo = Infinity, hHi = -Infinity;
+      hx.forEach(function (p) { hLo = Math.min(hLo, p[1]); hHi = Math.max(hHi, p[1]); });
+      hLo = Math.floor(hLo - 3); hHi = Math.ceil(hHi + 3);
+      yh = function (v) { return c.m.t + (1 - (v - hLo) / (hHi - hLo)) * (c.H - c.m.t - c.m.b); };
+      niceTicks(hLo, hHi, 4).forEach(function (v) {
+        el("text", { x: c.W - c.m.r + 6, y: yh(v) + 4, "text-anchor": "start", fill: "var(--hx)", opacity: 0.8 }, c.svg).textContent = v + "°";
+      });
+      var hpts = hx.map(function (p) { return [xs(Math.min(p[0], maxT)), yh(p[1])]; });
+      var base = c.H - c.m.b;
+      el("path", { d: pathD(hpts) + "L" + hpts[hpts.length - 1][0].toFixed(1) + " " + base + "L" + hpts[0][0].toFixed(1) + " " + base + "Z", fill: "var(--pump-band)", stroke: "none" }, c.svg);
+      el("path", { d: pathD(hpts), fill: "none", stroke: "var(--hx)", "stroke-width": 1.5, opacity: 0.6, "stroke-linejoin": "round" }, c.svg);
+    }
     var line = function (s, color, width, opacity) {
       el("path", { d: pathD(s.curve.map(function (p) { return [xs(p[0]), ys(Math.max(0, p[1]))]; })), fill: "none", stroke: color, "stroke-width": width, opacity: opacity, "stroke-linejoin": "round", "stroke-linecap": "round" }, c.svg);
     };
@@ -521,7 +548,9 @@ dl.kv dd { margin: 0; text-align: right; }
       var best = null, bd = Infinity;
       cur.curve.forEach(function (p) { var d = Math.abs(p[0] - t); if (d < bd) { bd = d; best = p; } });
       if (!best) return;
-      tip.innerHTML = "<b>" + fmt1(best[0]) + " s</b> · " + fmt1(best[1]) + " g";
+      var h = null, hd = Infinity;
+      hx.forEach(function (p) { var d = Math.abs(p[0] - best[0]); if (d < hd) { hd = d; h = p; } });
+      tip.innerHTML = "<b>" + fmt1(best[0]) + " s</b> · " + fmt1(best[1]) + " g" + (h && hd < 3 ? " · HX " + h[1] + " °C" : "");
       tip.style.display = "block";
       tip.style.left = Math.min(Math.max(0, xs(best[0]) + 12), c.W - tip.offsetWidth) + "px";
       tip.style.top = Math.max(0, ys(Math.max(0, best[1])) - 34) + "px";
@@ -579,6 +608,7 @@ dl.kv dd { margin: 0; text-align: right; }
       if (!maraReduce(S, m.kind, m.data, m.ts)) return;
       var parts = ["status"];
       if (m.kind === "telemetry") parts.push("temp");
+      if (m.kind === "telemetry" && S.shot && !S.shot.end) parts.push("shot");
       if (m.kind === "events") parts.push("lists", "shot");
       if (m.kind === "scale" && S.shot && !S.shot.end) parts.push("shot");
       schedule(parts);

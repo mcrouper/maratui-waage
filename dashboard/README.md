@@ -13,10 +13,19 @@ websocket in /ws/mara → function "Snapshot an neuen Client" → websocket out 
 http in GET /mara → template (index.html) → http response
 ```
 
-Node-RED keeps the state (last hour of temperatures, last 20 shots, last 30 events) in flow
+Node-RED keeps the state (last hour of temperatures, last 10 shots, last 30 events) in flow
 context, so a freshly opened page is populated immediately; the browser never talks to the MQTT
-broker itself, so no broker credentials end up in the page. The state lives in memory and is lost
-when Node-RED restarts.
+broker itself, so no broker credentials end up in the page.
+
+Shots survive Node-RED restarts and power cuts: the function node writes them to `$HOME/maratui/`
+of the Node-RED user (`--data-dir` to change) and reloads them on start:
+
+- `shots.json` — the last 10 shots incl. weight and HX curves (written atomically with fsync)
+- `shotdoku.txt` — plain-text archive; every shot pushed out of the last 10 is appended, e.g.
+  `2026-09-27 14:39:28  Dauer 11 s  Gewicht 41,9 g  Fluss 3,8 g/s  HX 95-104 °C  (kurz)` plus a
+  weight-per-second line
+
+Temperature history and events stay in memory only.
 
 `reducer.js` is the single implementation of how MQTT messages update that state. `deploy.py`
 injects it both into the Node-RED function node and into the page, so server and browser can't

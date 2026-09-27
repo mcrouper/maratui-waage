@@ -6,7 +6,7 @@
 // Keeping one implementation means the page and the server can't drift apart.
 
 var MARA_HISTORY_MS = 60 * 60 * 1000; // temperature history kept for the chart
-var MARA_MAX_SHOTS = 20;
+var MARA_MAX_SHOTS = 10; // shown on the page and persisted; older ones go to the text archive
 var MARA_MAX_EVENTS = 30;
 // The firmware reports pump runs under 15 s as `shot_aborted` (rinse / flush, but also a short
 // test pour). Those still go into the shot list when something clearly landed in the cup.
@@ -19,7 +19,7 @@ function maraInitialState() {
     cups: null, // last mara/cup_counter value
     weight: null, // { g, ts } from mara/scale
     hist: [], // [ts, boiler_now_c, boiler_target_c, hx_now_c, heating 0/1, pump 0/1]
-    shot: null, // current or most recent shot: { start, end, duration, weight_g, aborted, curve: [[s, g]] }
+    shot: null, // current or most recent pump run: { start, end, duration, weight_g, aborted, curve: [[s, g]], hx: [[s, °C]] }
     shots: [], // completed shots, newest first (short ones only with >= MARA_MIN_SHORT_SHOT_G)
     events: [], // mara/events payloads + ts, newest first
   };
@@ -32,6 +32,7 @@ function maraReduce(S, kind, p, now) {
     case "telemetry": {
       S.tele = Object.assign({}, p, { ts: now });
       S.hist.push([now, p.boiler_now_c, p.boiler_target_c, p.hx_now_c, p.heating_on ? 1 : 0, p.pump_on ? 1 : 0]);
+      if (S.shot && !S.shot.end && typeof p.hx_now_c === "number") (S.shot.hx = S.shot.hx || []).push([(now - S.shot.start) / 1000, p.hx_now_c]);
       var cutoff = now - MARA_HISTORY_MS;
       while (S.hist.length && S.hist[0][0] < cutoff) S.hist.shift();
       return true;
@@ -54,9 +55,10 @@ function maraReduce(S, kind, p, now) {
       S.events.unshift(Object.assign({}, p, { ts: now }));
       if (S.events.length > MARA_MAX_EVENTS) S.events.length = MARA_MAX_EVENTS;
       if (p.type === "shot_started") {
-        S.shot = { start: now, end: null, duration: null, weight_g: null, aborted: false, curve: [[0, 0]] };
+        var hx0 = S.tele && typeof S.tele.hx_now_c === "number" ? [[0, S.tele.hx_now_c]] : [];
+        S.shot = { start: now, end: null, duration: null, weight_g: null, aborted: false, curve: [[0, 0]], hx: hx0 };
       } else if (p.type === "shot_ended" || p.type === "shot_aborted") {
-        var shot = S.shot && !S.shot.end ? S.shot : { start: now - (p.duration || 0) * 1000, curve: [] };
+        var shot = S.shot && !S.shot.end ? S.shot : { start: now - (p.duration || 0) * 1000, curve: [], hx: [] };
         shot.end = now;
         shot.duration = p.duration;
         shot.weight_g = typeof p.weight_g === "number" ? p.weight_g : null;
@@ -68,8 +70,9 @@ function maraReduce(S, kind, p, now) {
         }
         S.shot = shot;
         if (!shot.aborted || (shot.weight_g !== null && shot.weight_g >= MARA_MIN_SHORT_SHOT_G)) {
-          S.shots.unshift({ ts: shot.start, duration: shot.duration, weight_g: shot.weight_g, aborted: shot.aborted, curve: shot.curve });
-          if (S.shots.length > MARA_MAX_SHOTS) S.shots.length = MARA_MAX_SHOTS;
+          S.shots.unshift({ ts: shot.start, duration: shot.duration, weight_g: shot.weight_g, aborted: shot.aborted, curve: shot.curve, hx: shot.hx });
+          // Shots pushed out of the list are handed to the caller (Node-RED archives them)
+          S.evicted = S.shots.splice(MARA_MAX_SHOTS);
         }
       }
       return true;
