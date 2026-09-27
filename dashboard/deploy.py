@@ -12,6 +12,8 @@ Shot persistence (survives Node-RED restarts and Pi power-off), in $HOME/maratui
 running Node-RED (override with --data-dir):
     shots.json    the last 10 shots incl. weight/HX curves, reloaded into the page on start
     shotdoku.txt  plain-text archive; each shot pushed out of the last 10 is appended here
+    cups.json     total cup count; +1 for every shot added to the shot list, also published
+                  retained to mara/cup_counter (read by the ESP32 display)
 
 Usage: ./deploy.py [--url http://192.168.178.162:1880] [--broker <mqtt-broker config node id>]
        ./deploy.py --dry-run   # print the flow JSON instead of deploying
@@ -30,6 +32,7 @@ TAB_LABEL = "MaraTUI Web"
 PAGE_PATH = "/mara"
 WS_PATH = "/ws/mara"
 TOPIC = "mara/#"
+CUP_TOPIC = "mara/cup_counter"
 
 # Shared by the function node's "On Start" and message code (separate scopes in Node-RED).
 # `fs` comes in through the node's `libs` (needs functionExternalModules, the default).
@@ -37,6 +40,18 @@ PERSIST_HELPERS = r"""
 const DATA_DIR = "__DATA_DIR__" || (env.get("HOME") + "/maratui");
 const SHOTS_FILE = DATA_DIR + "/shots.json";
 const ARCHIVE_FILE = DATA_DIR + "/shotdoku.txt";
+const CUPS_FILE = DATA_DIR + "/cups.json";
+
+function persistCups(cups) {
+    try {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+        const tmp = CUPS_FILE + ".tmp";
+        fs.writeFileSync(tmp, JSON.stringify({ cups: cups }));
+        fs.renameSync(tmp, CUPS_FILE);
+    } catch (e) {
+        node.error("Speichern von " + CUPS_FILE + " fehlgeschlagen: " + e.message);
+    }
+}
 
 // Write + fsync + rename, so a power cut leaves either the old or the new file, never half of one
 function persistShots(shots) {
@@ -103,9 +118,19 @@ const merged = S.shots.concat((Array.isArray(saved) ? saved : []).filter((s) => 
 S.shots = merged.slice(0, MARA_MAX_SHOTS);
 archiveShots(merged.slice(MARA_MAX_SHOTS));
 delete S.evicted;
+// Cup count: the saved value unless memory survived a redeploy; republish it retained so the
+// broker (and the ESP32 display) have it again after a Pi / Mosquitto restart
+try {
+    if (S.cups == null && fs.existsSync(CUPS_FILE)) S.cups = JSON.parse(fs.readFileSync(CUPS_FILE, "utf8")).cups;
+} catch (e) {
+    node.error("Lesen von " + CUPS_FILE + " fehlgeschlagen: " + e.message);
+}
+if (typeof S.cups !== "number") S.cups = 0;
 flow.set("mara", S);
 persistShots(S.shots);
-node.status({ text: S.shots.length + " Shots geladen" });
+persistCups(S.cups);
+setTimeout(() => node.send([null, { topic: "__CUP_TOPIC__", payload: String(S.cups), retain: true }]), 3000);
+node.status({ text: S.shots.length + " Shots, " + S.cups + " Tassen geladen" });
 """
 
 STATE_FUNC = """
@@ -122,12 +147,20 @@ if (S.evicted) {
     archiveShots(S.evicted);
     delete S.evicted;
 }
+let cupMsg = null;
 if (S.shots[0] !== newestBefore) {
     persistShots(S.shots);
-    node.status({ text: "letzter Shot " + new Date(S.shots[0].ts).toLocaleTimeString("de-DE") });
+    // Every shot that makes it into the shot list is a cup; the retained publish comes back
+    // through mqtt in as cup_counter and updates the pages and the ESP32 display
+    S.cups = (S.cups || 0) + 1;
+    persistCups(S.cups);
+    cupMsg = { topic: "__CUP_TOPIC__", payload: String(S.cups), retain: true };
+    node.status({ text: "letzter Shot " + new Date(S.shots[0].ts).toLocaleTimeString("de-DE") + ", " + S.cups + " Tassen" });
+} else if (kind === "cup_counter") {
+    persistCups(S.cups); // a value set from outside (e.g. mosquitto_pub) becomes the new count
 }
 flow.set("mara", S);
-return { payload: JSON.stringify({ kind: kind, data: p, ts: now }) };
+return [{ payload: JSON.stringify({ kind: kind, data: p, ts: now }) }, cupMsg];
 """
 
 SNAPSHOT_FUNC = """
@@ -189,9 +222,13 @@ def build_flow(broker_id: str, data_dir: str = "") -> dict:
          "datatype": "utf8", "broker": broker_id, "nl": False, "rap": True, "rh": 0, "inputs": 0,
          "x": 130, "y": 100, "wires": [[nid("state")]]},
         {"id": nid("state"), "type": "function", "name": "Zustand + Broadcast",
-         "func": reducer + helpers + STATE_FUNC, "outputs": 1, "timeout": 0, "noerr": 0,
-         "initialize": reducer + helpers + STATE_INIT, "finalize": "",
-         "libs": [{"var": "fs", "module": "fs"}], "x": 360, "y": 100, "wires": [[ws_out]]},
+         "func": reducer + helpers + STATE_FUNC.replace("__CUP_TOPIC__", CUP_TOPIC), "outputs": 2,
+         "timeout": 0, "noerr": 0,
+         "initialize": reducer + helpers + STATE_INIT.replace("__CUP_TOPIC__", CUP_TOPIC), "finalize": "",
+         "libs": [{"var": "fs", "module": "fs"}], "x": 360, "y": 100, "wires": [[ws_out], [nid("cup-out")]]},
+        {"id": nid("cup-out"), "type": "mqtt out", "name": CUP_TOPIC, "topic": "", "qos": "1", "retain": "",
+         "respTopic": "", "contentType": "", "userProps": "", "correl": "", "expiry": "", "broker": broker_id,
+         "x": 610, "y": 60, "wires": []},
         {"id": nid("ws-in"), "type": "websocket in", "name": WS_PATH, "server": listener, "client": "",
          "x": 130, "y": 160, "wires": [[nid("snapshot")]]},
         {"id": nid("snapshot"), "type": "function", "name": "Snapshot an neuen Client",

@@ -25,6 +25,11 @@ of the Node-RED user (`--data-dir` to change) and reloads them on start:
   `2026-09-27 14:39:28  Dauer 11 s  Gewicht 41,9 g  Fluss 3,8 g/s  HX 95-104 °C  (kurz)` plus a
   weight-per-second line
 
+- `cups.json` — total cup count, +1 for every shot that enters the shot list (normal shots and
+  short pours with >= 5 g, not rinses). Published retained to `mara/cup_counter`, so the ESP32
+  display shows it too — this replaces the Home Assistant automation for setups without HA. To set
+  a start value: `mosquitto_pub -r -t mara/cup_counter -m 1234` (plus `-h/-u/-P`); the flow adopts it.
+
 Temperature history and events stay in memory only.
 
 `reducer.js` is the single implementation of how MQTT messages update that state. `deploy.py`
