@@ -107,10 +107,9 @@ impl DualScaleCalibration {
     }
 }
 
-// Rolling-window trimmed-mean parameters, matching the `HX711_ADC` Arduino library's proven
-// defaults (as used by e.g. the CleverCoffee espresso-PID firmware): average the last
-// `WINDOW_SAMPLES` raw readings, but drop the highest `TRIM_HIGH` and lowest `TRIM_LOW` of
-// them first so a single spike doesn't skew the result.
+// Rolling-window trimmed-mean parameters: average the last `WINDOW_SAMPLES` raw readings,
+// but drop the highest `TRIM_HIGH` and lowest `TRIM_LOW` of them first so a single spike
+// doesn't skew the result.
 //
 // Deliberately NOT a step-limiting filter (reject-if-too-different-from-last-accepted-value):
 // that design can get permanently stuck — once a real, fast change (weight added/removed) gets
@@ -118,7 +117,13 @@ impl DualScaleCalibration {
 // reference and rejected too, so the old value never updates. A rolling window has no such
 // failure mode: it always reflects the most recent samples, converging on a real change within
 // one window's worth of readings instead of staying stuck indefinitely.
-const WINDOW_SAMPLES: usize = 32;
+//
+// At the observed per-channel sample rate (~130ms/sample, HX711 10SPS mode), the original
+// 32-sample window took ~4.1s to fully settle after a step change — measured live on hardware
+// as a multi-second "hang" whenever weight was added/removed. Steady-state noise turned out to
+// be tiny (±1-2 raw counts), so that large a window bought far more smoothing than the signal
+// needed. 8 samples settle in ~1s and still trim single-sample spikes.
+const WINDOW_SAMPLES: usize = 8;
 const TRIM_HIGH: usize = 1;
 const TRIM_LOW: usize = 1;
 
