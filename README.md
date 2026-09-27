@@ -126,6 +126,10 @@ make sim-ha                                      # simulator
 
 See [docs/home-assistant.md](docs/home-assistant.md) for the full entity list, MQTT topic reference, and cup counter setup.
 
+## Web Dashboard
+
+A standalone live dashboard page (temperatures with history, live scale weight, shot timer and weight curve, recent shots, events, device status) served by Node-RED at `http://<node-red-host>:1880/mara`, deployed with `python3 dashboard/deploy.py`. See [dashboard/README.md](dashboard/README.md).
+
 ## Hardware
 
 Target board: **ESP32 Type-C** with an external **ILI9341** 240×320 TFT display connected over SPI. There is a single physical button.

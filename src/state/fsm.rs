@@ -173,6 +173,7 @@ impl AppStateMachine {
                 }
                 state.last_raw_weight_dg = Some(weight_dg);
                 state.weight_dg = Some(weight_dg - state.scale_tare_dg);
+                Self::publish_weight_if_due(state, Instant::now());
             }
 
             AppEvent::RawWeightUpdated { left, right } => {
@@ -303,6 +304,28 @@ impl AppStateMachine {
         state.weight_dg = Some(0);
     }
 
+    /// Publish the displayed (tared) weight to `<prefix>/scale` when it changed, at most once per
+    /// `SCALE_PUBLISH_INTERVAL`. A change that falls inside the interval isn't lost: the scale
+    /// keeps sampling, so the next `WeightUpdated` after the interval publishes the latest value.
+    fn publish_weight_if_due(state: &mut GlobalAppState, now: Instant) {
+        let Some(weight_dg) = state.weight_dg else {
+            return;
+        };
+        if state.last_published_weight_dg == Some(weight_dg) {
+            return;
+        }
+        let due = state
+            .last_scale_publish_at
+            .map(|t| now.saturating_duration_since(t) >= SCALE_PUBLISH_INTERVAL)
+            .unwrap_or(true);
+        if !due {
+            return;
+        }
+        state.last_published_weight_dg = Some(weight_dg);
+        state.last_scale_publish_at = Some(now);
+        state.enqueue_mqtt_message("scale", scale_payload(weight_dg));
+    }
+
     /// Handle telemetry frame updates
     pub fn handle_telemetry_frame(state: &mut GlobalAppState, frame: TelemetryFrame, now: Instant) {
         state.offline_mode = false;
@@ -353,7 +376,7 @@ impl AppStateMachine {
 
         // Process each event through the FSM
         for event in events {
-            let event_payload = telemetry_event_payload(&event);
+            let event_payload = telemetry_event_payload(&event, state.weight_dg);
             #[cfg(feature = "home-assistant")]
             home_assistant::enqueue_event_states(state, &event);
             Self::handle_event(state, AppEvent::from_telemetry(event));
@@ -406,6 +429,24 @@ fn push_sample(buf: &mut std::collections::VecDeque<f64>, value: f64) {
     }
 }
 
+/// Cap on `<prefix>/scale` publishes (~4 Hz), so sub-gram noise can't flood the MQTT queue.
+const SCALE_PUBLISH_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Format decigrams as grams with one decimal (`-5` → `-0.5`), exact — no float rounding.
+fn grams_json(weight_dg: i32) -> String {
+    let sign = if weight_dg < 0 { "-" } else { "" };
+    let abs = weight_dg.unsigned_abs();
+    format!("{}{}.{}", sign, abs / 10, abs % 10)
+}
+
+fn opt_grams_json(weight_dg: Option<i32>) -> String {
+    weight_dg.map_or_else(|| "null".to_string(), grams_json)
+}
+
+fn scale_payload(weight_dg: i32) -> String {
+    format!("{{\"weight_g\":{}}}", grams_json(weight_dg))
+}
+
 fn device_status_payload(info: &DeviceInfo) -> String {
     format!(
         "{{\"uptime_s\":{},\"wifi_ssid\":\"{}\",\"wifi_rssi\":{},\"ip\":{},\"free_heap_b\":{},\"last_telemetry_age_s\":{}}}",
@@ -418,15 +459,21 @@ fn device_status_payload(info: &DeviceInfo) -> String {
     )
 }
 
-fn telemetry_event_payload(event: &crate::telemetry::AppEvent) -> String {
+/// `weight_dg` is the net (shot-start-tared) scale weight at the moment the event fires, so for
+/// `shot_ended`/`shot_aborted` it's the shot's yield; `null` without a scale.
+fn telemetry_event_payload(event: &crate::telemetry::AppEvent, weight_dg: Option<i32>) -> String {
     match event {
         crate::telemetry::AppEvent::ShotStarted => "{\"type\":\"shot_started\"}".to_string(),
-        crate::telemetry::AppEvent::ShotEnded { duration } => {
-            format!("{{\"type\":\"shot_ended\",\"duration\":{}}}", duration)
-        }
-        crate::telemetry::AppEvent::ShotAborted { duration } => {
-            format!("{{\"type\":\"shot_aborted\",\"duration\":{}}}", duration)
-        }
+        crate::telemetry::AppEvent::ShotEnded { duration } => format!(
+            "{{\"type\":\"shot_ended\",\"duration\":{},\"weight_g\":{}}}",
+            duration,
+            opt_grams_json(weight_dg)
+        ),
+        crate::telemetry::AppEvent::ShotAborted { duration } => format!(
+            "{{\"type\":\"shot_aborted\",\"duration\":{},\"weight_g\":{}}}",
+            duration,
+            opt_grams_json(weight_dg)
+        ),
         crate::telemetry::AppEvent::WaterRefillNeeded { code } => {
             format!("{{\"type\":\"water_refill_needed\",\"code\":{}}}", code)
         }
@@ -559,6 +606,68 @@ mod tests {
         // Second press (backlight now on) switches screens
         AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Short));
         assert_eq!(state.current_screen, initial_screen.next());
+    }
+
+    fn scale_messages(state: &mut GlobalAppState) -> Vec<String> {
+        state
+            .take_outbound_mqtt_messages()
+            .into_iter()
+            .filter(|m| m.topic_suffix == "scale")
+            .map(|m| m.payload)
+            .collect()
+    }
+
+    #[test]
+    fn test_weight_published_on_change_and_rate_limited() {
+        let mut state = GlobalAppState::default();
+        let t0 = Instant::now();
+        state.weight_dg = Some(0);
+        AppStateMachine::publish_weight_if_due(&mut state, t0);
+        assert_eq!(scale_messages(&mut state), vec![r#"{"weight_g":0.0}"#]);
+
+        // Unchanged weight: nothing sent, even long after the interval
+        AppStateMachine::publish_weight_if_due(&mut state, t0 + Duration::from_secs(5));
+        assert!(scale_messages(&mut state).is_empty());
+
+        // Changed within the interval: held back...
+        let t1 = t0 + Duration::from_secs(10);
+        state.weight_dg = Some(123);
+        AppStateMachine::publish_weight_if_due(&mut state, t1);
+        state.weight_dg = Some(187);
+        AppStateMachine::publish_weight_if_due(&mut state, t1 + Duration::from_millis(100));
+        assert_eq!(scale_messages(&mut state), vec![r#"{"weight_g":12.3}"#]);
+
+        // ...and the latest value goes out on the next sample after the interval
+        AppStateMachine::publish_weight_if_due(&mut state, t1 + SCALE_PUBLISH_INTERVAL);
+        assert_eq!(scale_messages(&mut state), vec![r#"{"weight_g":18.7}"#]);
+    }
+
+    #[test]
+    fn test_weight_updated_publishes_scale_topic() {
+        let mut state = GlobalAppState::default();
+        AppStateMachine::handle_event(&mut state, AppEvent::WeightUpdated { weight_dg: 100 });
+        assert_eq!(scale_messages(&mut state), vec![r#"{"weight_g":0.0}"#]);
+    }
+
+    #[test]
+    fn test_grams_json_formats_decigrams_exactly() {
+        assert_eq!(grams_json(0), "0.0");
+        assert_eq!(grams_json(362), "36.2");
+        assert_eq!(grams_json(-5), "-0.5");
+        assert_eq!(grams_json(-123), "-12.3");
+    }
+
+    #[test]
+    fn test_shot_events_carry_weight() {
+        use crate::telemetry::AppEvent as TelemetryEvent;
+        assert_eq!(
+            telemetry_event_payload(&TelemetryEvent::ShotEnded { duration: 28 }, Some(362)),
+            r#"{"type":"shot_ended","duration":28,"weight_g":36.2}"#
+        );
+        assert_eq!(
+            telemetry_event_payload(&TelemetryEvent::ShotAborted { duration: 4 }, None),
+            r#"{"type":"shot_aborted","duration":4,"weight_g":null}"#
+        );
     }
 
     #[test]
