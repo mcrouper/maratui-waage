@@ -494,10 +494,9 @@ dl.kv dd { margin: 0; text-align: right; }
 
   function renderShotChart() {
     var box = $("shotChart"), tip = box.querySelector(".tip");
-    // The running pump run while it lasts, afterwards the newest listed shot — so a short test
-    // pour (listed) stays visible, but a later rinse (not listed) doesn't replace the last shot
-    var cur = S.shot && !S.shot.end ? S.shot : S.shots[0] || null;
-    if (cur && cur.curve.length < 2) cur = null;
+    // The latest pump run (running or finished, short or not) stays up until the next one starts
+    var cur = S.shot || S.shots[0] || null;
+    if (cur && !cur.curve.length) cur = null;
     var prev = S.shots.filter(function (s) { return s.curve !== (cur && cur.curve) && s.curve.length > 1; }).slice(0, 5);
     box.querySelector(".empty").style.display = cur ? "none" : "grid";
     var c = setup(box);
