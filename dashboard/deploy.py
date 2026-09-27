@@ -12,6 +12,7 @@ Shot persistence (survives Node-RED restarts and Pi power-off), in $HOME/maratui
 running Node-RED (override with --data-dir):
     shots.json    the last 10 shots incl. weight/HX curves, reloaded into the page on start
     shotdoku.txt  plain-text archive; each shot pushed out of the last 10 is appended here
+    shots/*.jpg   one chart per shot (weight + HX), rendered on the Pi by render_shot.py (Pillow)
     cups.json     total cup count; +1 for every shot added to the shot list, also published
                   retained to mara/cup_counter (read by the ESP32 display)
 
@@ -41,6 +42,8 @@ const DATA_DIR = "__DATA_DIR__" || (env.get("HOME") + "/maratui");
 const SHOTS_FILE = DATA_DIR + "/shots.json";
 const ARCHIVE_FILE = DATA_DIR + "/shotdoku.txt";
 const CUPS_FILE = DATA_DIR + "/cups.json";
+const IMG_DIR = DATA_DIR + "/shots";
+const RENDER_SCRIPT = DATA_DIR + "/render_shot.py";
 
 function persistCups(cups) {
     try {
@@ -90,6 +93,29 @@ function shotText(s) {
     return line + "\n" + (pts.length ? "  Gewicht je Sekunde: " + pts.join(" ") + "\n" : "");
 }
 
+function shotImagePath(s) {
+    const d = new Date(s.ts);
+    return IMG_DIR + "/" + d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + "_" +
+        pad(d.getHours()) + "-" + pad(d.getMinutes()) + "-" + pad(d.getSeconds()) + ".jpg";
+}
+
+// Render the shot's chart to JPEG with render_shot.py (async; failures only logged)
+function renderShot(s, onlyIfMissing) {
+    try {
+        fs.mkdirSync(IMG_DIR, { recursive: true });
+        const out = shotImagePath(s);
+        if (onlyIfMissing && fs.existsSync(out)) return;
+        const proc = cp.spawn("python3", [RENDER_SCRIPT, out], { stdio: ["pipe", "ignore", "pipe"] });
+        let err = "";
+        proc.stderr.on("data", (c) => { err += c; });
+        proc.on("error", (e) => node.error("JPG " + out + ": " + e.message));
+        proc.on("close", (code) => { if (code) node.error("JPG " + out + " fehlgeschlagen: " + err.slice(-400)); });
+        proc.stdin.end(JSON.stringify(s));
+    } catch (e) {
+        node.error("JPG-Erzeugung fehlgeschlagen: " + e.message);
+    }
+}
+
 // Oldest first, so the archive reads chronologically
 function archiveShots(shots) {
     if (!shots.length) return;
@@ -112,11 +138,27 @@ try {
 } catch (e) {
     node.error("Lesen von " + SHOTS_FILE + " fehlgeschlagen: " + e.message);
 }
+// Install the current JPEG renderer next to the data files
+try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(RENDER_SCRIPT, __RENDER_PY__);
+} catch (e) {
+    node.error("Schreiben von " + RENDER_SCRIPT + " fehlgeschlagen: " + e.message);
+}
 const seen = new Set(S.shots.map((s) => s.ts));
 const merged = S.shots.concat((Array.isArray(saved) ? saved : []).filter((s) => !seen.has(s.ts)))
     .sort((a, b) => b.ts - a.ts);
 S.shots = merged.slice(0, MARA_MAX_SHOTS);
 archiveShots(merged.slice(MARA_MAX_SHOTS));
+// Shots recorded before HX was stored per shot: take it from the temperature history if it's
+// still there, then render any missing JPEGs
+S.shots.forEach((s) => {
+    if (s.hx && s.hx.length) return;
+    const end = s.ts + ((s.duration || 0) + 1) * 1000;
+    s.hx = S.hist.filter((r) => r[0] >= s.ts && r[0] <= end && typeof r[3] === "number")
+        .map((r) => [(r[0] - s.ts) / 1000, r[3]]);
+});
+S.shots.forEach((s) => renderShot(s, true));
 delete S.evicted;
 // Cup count: the saved value unless memory survived a redeploy; republish it retained so the
 // broker (and the ESP32 display) have it again after a Pi / Mosquitto restart
@@ -150,6 +192,7 @@ if (S.evicted) {
 let cupMsg = null;
 if (S.shots[0] !== newestBefore) {
     persistShots(S.shots);
+    renderShot(S.shots[0], false);
     // Every shot that makes it into the shot list is a cup; the retained publish comes back
     // through mqtt in as cup_counter and updates the pages and the ESP32 display
     S.cups = (S.cups || 0) + 1;
@@ -224,8 +267,9 @@ def build_flow(broker_id: str, data_dir: str = "") -> dict:
         {"id": nid("state"), "type": "function", "name": "Zustand + Broadcast",
          "func": reducer + helpers + STATE_FUNC.replace("__CUP_TOPIC__", CUP_TOPIC), "outputs": 2,
          "timeout": 0, "noerr": 0,
-         "initialize": reducer + helpers + STATE_INIT.replace("__CUP_TOPIC__", CUP_TOPIC), "finalize": "",
-         "libs": [{"var": "fs", "module": "fs"}], "x": 360, "y": 100, "wires": [[ws_out], [nid("cup-out")]]},
+         "initialize": reducer + helpers + STATE_INIT.replace("__CUP_TOPIC__", CUP_TOPIC)
+            .replace("__RENDER_PY__", json.dumps((HERE / "render_shot.py").read_text())), "finalize": "",
+         "libs": [{"var": "fs", "module": "fs"}, {"var": "cp", "module": "child_process"}], "x": 360, "y": 100, "wires": [[ws_out], [nid("cup-out")]]},
         {"id": nid("cup-out"), "type": "mqtt out", "name": CUP_TOPIC, "topic": "", "qos": "1", "retain": "",
          "respTopic": "", "contentType": "", "userProps": "", "correl": "", "expiry": "", "broker": broker_id,
          "x": 610, "y": 60, "wires": []},

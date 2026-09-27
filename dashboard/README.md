@@ -25,6 +25,10 @@ of the Node-RED user (`--data-dir` to change) and reloads them on start:
   `2026-09-27 14:39:28  Dauer 11 s  Gewicht 41,9 g  Fluss 3,8 g/s  HX 95-104 °C  (kurz)` plus a
   weight-per-second line
 
+- `shots/JJJJ-MM-TT_HH-MM-SS.jpg` — one chart per shot (weight curve, HX temperature behind it,
+  duration / weight / flow in the title), rendered on the Node-RED host by `render_shot.py`
+  (needs `python3` with Pillow and the DejaVu fonts, both on Raspberry Pi OS by default). The
+  flow installs the script into the data dir on start and renders missing images for saved shots.
 - `cups.json` — total cup count, +1 for every shot that enters the shot list (normal shots and
   short pours with >= 5 g, not rinses). Published retained to `mara/cup_counter`, so the ESP32
   display shows it too — this replaces the Home Assistant automation for setups without HA. To set
