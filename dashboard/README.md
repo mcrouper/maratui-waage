@@ -11,6 +11,7 @@ No external dependencies (no CDN, no Dashboard nodes) — it works on an offline
 mqtt in (mara/#) → function "Zustand + Broadcast" → websocket out /ws/mara  (broadcast to all pages)
 websocket in /ws/mara → function "Snapshot an neuen Client" → websocket out  (state for a new page)
 http in GET /mara → template (index.html) → http response
+http in GET /mara/shot/:ts → function → http response            (the shot's JPEG, linked in the table)
 ```
 
 Node-RED keeps the state (last hour of temperatures, last 10 shots, last 30 events) in flow

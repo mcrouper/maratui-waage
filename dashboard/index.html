@@ -131,6 +131,8 @@ table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th { text-align: left; color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; padding: 0 8px 6px 0; }
 td { padding: 7px 8px 7px 0; border-top: 1px solid var(--border); }
 th.r, td.r { text-align: right; }
+td a { color: var(--accent); font-weight: 600; text-decoration: none; }
+td a:hover { text-decoration: underline; }
 .muted { color: var(--muted); }
 .events { list-style: none; margin: 0; padding: 0; font-size: 14px; }
 .events li { display: flex; gap: 10px; padding: 6px 0; border-top: 1px solid var(--border); }
@@ -236,8 +238,8 @@ dl.kv dd { margin: 0; text-align: right; }
         <div class="card-head"><h2>Letzte 10 Shots</h2></div>
         <div class="scroll">
           <table>
-            <thead><tr><th>Zeit</th><th class="r">Dauer</th><th class="r">Gewicht</th><th class="r">Fluss</th></tr></thead>
-            <tbody id="shotRows"><tr><td colspan="4" class="muted">Noch keine Shots gespeichert</td></tr></tbody>
+            <thead><tr><th>Zeit</th><th class="r">Dauer</th><th class="r">Gewicht</th><th class="r">Fluss</th><th class="r">Bild</th></tr></thead>
+            <tbody id="shotRows"><tr><td colspan="5" class="muted">Noch keine Shots gespeichert</td></tr></tbody>
           </table>
         </div>
       </section>
@@ -376,13 +378,17 @@ dl.kv dd { margin: 0; text-align: right; }
 
   function rssiText(r) { return r >= -55 ? "sehr gut" : r >= -67 ? "gut" : r >= -75 ? "mäßig" : "schwach"; }
 
+  // Served next to the page: /mara -> /mara/shot/<ts>.jpg (also fine when opened as /mara/)
+  var shotImgBase = location.pathname.replace(/\/+$/, "") + "/shot/";
+
   function renderLists() {
     var rows = S.shots.map(function (s) {
       var flow = s.weight_g != null && s.duration ? fmt1(s.weight_g / s.duration) + " g/s" : "–";
       return "<tr><td>" + dayClock(s.ts) + (s.aborted ? " <span class='muted'>· kurz</span>" : "") + "</td><td class='r num'>" + s.duration + " s</td><td class='r num'>" +
-        (s.weight_g != null ? fmt1(s.weight_g) + " g" : "–") + "</td><td class='r num muted'>" + flow + "</td></tr>";
+        (s.weight_g != null ? fmt1(s.weight_g) + " g" : "–") + "</td><td class='r num muted'>" + flow + "</td>" +
+        "<td class='r'><a href='" + shotImgBase + s.ts + ".jpg' target='_blank' rel='noopener'>JPG</a></td></tr>";
     });
-    $("shotRows").innerHTML = rows.length ? rows.join("") : "<tr><td colspan='4' class='muted'>Noch keine Shots gespeichert</td></tr>";
+    $("shotRows").innerHTML = rows.length ? rows.join("") : "<tr><td colspan='5' class='muted'>Noch keine Shots gespeichert</td></tr>";
     var ev = S.events.slice(0, 12).map(function (e) {
       return "<li><time class='num'>" + clockS(e.ts) + "</time><span>" + esc(eventText(e)) + "</span></li>";
     });

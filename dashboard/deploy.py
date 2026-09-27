@@ -7,6 +7,7 @@ Node-RED admin API, leaving every other flow untouched:
     mqtt in (mara/#) -> function (reduce + keep state + persist shots) -> websocket out /ws/mara
     websocket in /ws/mara -> function (snapshot for the new client) -> websocket out
     http in GET /mara -> template (the page) -> http response
+    http in GET /mara/shot/:ts -> function (read shots/<date>_<time>.jpg) -> http response
 
 Shot persistence (survives Node-RED restarts and Pi power-off), in $HOME/maratui/ of the user
 running Node-RED (override with --data-dir):
@@ -206,6 +207,23 @@ flow.set("mara", S);
 return [{ payload: JSON.stringify({ kind: kind, data: p, ts: now }) }, cupMsg];
 """
 
+# GET /mara/shot/<ts>.jpg — the shot's JPEG. The file name is derived from the shot's start
+# timestamp here on the Pi, so it always matches renderShot() regardless of the browser's time zone.
+IMAGE_FUNC = """
+const ts = Number(String(msg.req.params.ts || "").replace(/\\.jpg$/, ""));
+const file = Number.isFinite(ts) && ts > 0 ? shotImagePath({ ts: ts }) : null;
+if (file && fs.existsSync(file)) {
+    msg.payload = fs.readFileSync(file);
+    msg.headers = { "content-type": "image/jpeg", "cache-control": "max-age=86400" };
+    msg.statusCode = 200;
+} else {
+    msg.payload = "Kein Bild für diesen Shot";
+    msg.headers = { "content-type": "text/plain; charset=utf-8" };
+    msg.statusCode = 404;
+}
+return msg;
+"""
+
 SNAPSHOT_FUNC = """
 if (msg.payload !== "hello") return null;
 return {
@@ -285,6 +303,14 @@ def build_flow(broker_id: str, data_dir: str = "") -> dict:
         {"id": nid("page"), "type": "template", "name": "index.html", "field": "payload",
          "fieldType": "msg", "format": "html", "syntax": "plain", "template": page, "output": "str",
          "x": 340, "y": 220, "wires": [[nid("http-out")]]},
+        {"id": nid("img-in"), "type": "http in", "name": f"GET {PAGE_PATH}/shot/:ts", "url": f"{PAGE_PATH}/shot/:ts",
+         "method": "get", "upload": False, "swaggerDoc": "", "x": 150, "y": 280, "wires": [[nid("img")]]},
+        {"id": nid("img"), "type": "function", "name": "Shot-JPG ausliefern", "func": helpers + IMAGE_FUNC,
+         "outputs": 1, "timeout": 0, "noerr": 0, "initialize": "", "finalize": "",
+         "libs": [{"var": "fs", "module": "fs"}, {"var": "cp", "module": "child_process"}],
+         "x": 370, "y": 280, "wires": [[nid("img-out")]]},
+        {"id": nid("img-out"), "type": "http response", "name": "", "statusCode": "", "headers": {},
+         "x": 570, "y": 280, "wires": []},
         {"id": nid("http-out"), "type": "http response", "name": "", "statusCode": "",
          "headers": {"content-type": "text/html; charset=utf-8", "cache-control": "no-cache"},
          "x": 530, "y": 220, "wires": []},
