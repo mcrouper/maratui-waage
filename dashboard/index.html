@@ -378,7 +378,7 @@ dl.kv dd { margin: 0; text-align: right; }
   function renderLists() {
     var rows = S.shots.map(function (s) {
       var flow = s.weight_g != null && s.duration ? fmt1(s.weight_g / s.duration) + " g/s" : "–";
-      return "<tr><td>" + dayClock(s.ts) + "</td><td class='r num'>" + s.duration + " s</td><td class='r num'>" +
+      return "<tr><td>" + dayClock(s.ts) + (s.aborted ? " <span class='muted'>· kurz</span>" : "") + "</td><td class='r num'>" + s.duration + " s</td><td class='r num'>" +
         (s.weight_g != null ? fmt1(s.weight_g) + " g" : "–") + "</td><td class='r num muted'>" + flow + "</td></tr>";
     });
     $("shotRows").innerHTML = rows.length ? rows.join("") : "<tr><td colspan='4' class='muted'>Noch keine Shots seit Node-RED-Start</td></tr>";
@@ -494,9 +494,11 @@ dl.kv dd { margin: 0; text-align: right; }
 
   function renderShotChart() {
     var box = $("shotChart"), tip = box.querySelector(".tip");
-    var cur = S.shot && S.shot.curve && S.shot.curve.length > 1 && !(S.shot.end && S.shot.aborted) ? S.shot : null;
-    if (!cur && S.shots.length && S.shots[0].curve.length > 1) cur = S.shots[0];
-    var prev = S.shots.filter(function (s) { return s !== cur && s.curve !== (cur && cur.curve) && s.curve.length > 1; }).slice(0, 5);
+    // The running pump run while it lasts, afterwards the newest listed shot — so a short test
+    // pour (listed) stays visible, but a later rinse (not listed) doesn't replace the last shot
+    var cur = S.shot && !S.shot.end ? S.shot : S.shots[0] || null;
+    if (cur && cur.curve.length < 2) cur = null;
+    var prev = S.shots.filter(function (s) { return s.curve !== (cur && cur.curve) && s.curve.length > 1; }).slice(0, 5);
     box.querySelector(".empty").style.display = cur ? "none" : "grid";
     var c = setup(box);
     if (!cur) return;

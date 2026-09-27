@@ -8,6 +8,9 @@
 var MARA_HISTORY_MS = 60 * 60 * 1000; // temperature history kept for the chart
 var MARA_MAX_SHOTS = 20;
 var MARA_MAX_EVENTS = 30;
+// The firmware reports pump runs under 15 s as `shot_aborted` (rinse / flush, but also a short
+// test pour). Those still go into the shot list when something clearly landed in the cup.
+var MARA_MIN_SHORT_SHOT_G = 5;
 
 function maraInitialState() {
   return {
@@ -17,7 +20,7 @@ function maraInitialState() {
     weight: null, // { g, ts } from mara/scale
     hist: [], // [ts, boiler_now_c, boiler_target_c, hx_now_c, heating 0/1, pump 0/1]
     shot: null, // current or most recent shot: { start, end, duration, weight_g, aborted, curve: [[s, g]] }
-    shots: [], // completed (non-aborted) shots, newest first
+    shots: [], // completed shots, newest first (short ones only with >= MARA_MIN_SHORT_SHOT_G)
     events: [], // mara/events payloads + ts, newest first
   };
 }
@@ -58,10 +61,14 @@ function maraReduce(S, kind, p, now) {
         shot.duration = p.duration;
         shot.weight_g = typeof p.weight_g === "number" ? p.weight_g : null;
         shot.aborted = p.type === "shot_aborted";
-        if (shot.weight_g !== null && shot.curve.length) shot.curve.push([p.duration, shot.weight_g]);
+        if (shot.weight_g !== null && shot.curve.length) {
+          // `duration` is whole seconds, so never place the end point before the last sample
+          var lastT = shot.curve[shot.curve.length - 1][0];
+          shot.curve.push([Math.max(lastT, p.duration), shot.weight_g]);
+        }
         S.shot = shot;
-        if (!shot.aborted) {
-          S.shots.unshift({ ts: shot.start, duration: shot.duration, weight_g: shot.weight_g, curve: shot.curve });
+        if (!shot.aborted || (shot.weight_g !== null && shot.weight_g >= MARA_MIN_SHORT_SHOT_G)) {
+          S.shots.unshift({ ts: shot.start, duration: shot.duration, weight_g: shot.weight_g, aborted: shot.aborted, curve: shot.curve });
           if (S.shots.length > MARA_MAX_SHOTS) S.shots.length = MARA_MAX_SHOTS;
         }
       }

@@ -65,7 +65,7 @@ That's it — on first MQTT connect the firmware publishes all discovery configs
 |---|---|---|
 | `shot_started` | — | Pump just turned on |
 | `shot_ended` | `duration` (int, seconds), `weight_g` (number or `null`) | Pump turned off; duration and yield (net scale weight, tared at shot start; `null` without a scale reading) |
-| `shot_aborted` | `duration` (int, seconds), `weight_g` (number or `null`) | Pump ran < 10 s (rinse / pre-heat kick) |
+| `shot_aborted` | `duration` (int, seconds), `weight_g` (number or `null`) | Pump ran < 15 s (rinse / pre-heat kick, or a very short pour) |
 | `water_refill_needed` | `code` (int) | Water low detected |
 | `water_refill_cleared` | — | Water low cleared |
 | `mode_changed` | `from`, `to` (strings) | Machine mode transition |
