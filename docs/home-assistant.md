@@ -64,11 +64,20 @@ That's it — on first MQTT connect the firmware publishes all discovery configs
 | `type` | Extra fields | Description |
 |---|---|---|
 | `shot_started` | — | Pump just turned on |
-| `shot_ended` | `duration` (int, seconds) | Pump turned off; duration of the shot |
-| `shot_aborted` | `duration` (int, seconds) | Pump ran < 10 s (rinse / pre-heat kick) |
+| `shot_ended` | `duration` (int, seconds), `weight_g` (number or `null`) | Pump turned off; duration and yield (net scale weight, tared at shot start; `null` without a scale reading) |
+| `shot_aborted` | `duration` (int, seconds), `weight_g` (number or `null`) | Pump ran < 15 s (rinse / pre-heat kick, or a very short pour) |
 | `water_refill_needed` | `code` (int) | Water low detected |
 | `water_refill_cleared` | — | Water low cleared |
 | `mode_changed` | `from`, `to` (strings) | Machine mode transition |
+
+### `<prefix>/scale` — scale weight, on change (≤ 4 Hz)
+
+```json
+{ "weight_g": 36.2 }
+```
+
+Net weight shown on the display (grams, one decimal): tared on boot, at every shot start and on a
+double press. Published only when the value changes, at most every 250 ms.
 
 ### `<prefix>/status` — periodic device info (~30 s)
 

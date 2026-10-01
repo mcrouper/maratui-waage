@@ -181,6 +181,10 @@ pub struct GlobalAppState {
     /// Raw reading captured at the moment the last shot started; subtracted from
     /// subsequent readings so the Dashboard shows net (cup-tared) extracted weight.
     pub scale_tare_dg: i32,
+    /// Last weight published to `<prefix>/scale`, so unchanged readings aren't re-sent.
+    pub last_published_weight_dg: Option<i32>,
+    /// When `<prefix>/scale` was last published (rate limit, see `SCALE_PUBLISH_INTERVAL`).
+    pub last_scale_publish_at: Option<Instant>,
     /// Current step of the scale calibration wizard, if active (started by a 3s button hold).
     pub calibration_step: Option<CalibrationStep>,
     /// Screen to return to once calibration finishes or is cancelled.
@@ -218,6 +222,8 @@ impl Default for GlobalAppState {
             last_raw_weight_dg: None,
             weight_dg: None,
             scale_tare_dg: 0,
+            last_published_weight_dg: None,
+            last_scale_publish_at: None,
             calibration_step: None,
             screen_before_calibration: None,
             raw_weight_left: None,
