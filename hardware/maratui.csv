@@ -1,0 +1,6 @@
+"ID";"Bezeichner";"Footprint";"Stückzahl";"Bezeichnung";"Anbieter und Referenz";
+1;"J2";"JST_EH_B2B-EH-A_1x02_P2.50mm_Vertical";1;"Button";;;
+2;"J4";"JST_EH_B2B-EH-A_1x02_P2.50mm_Vertical";1;"Mara";;;
+3;"U1";"ESP32_30pin";1;"~";;;
+4;"U2, U3";"HX711_module";2;"HX711";;;
+5;"U4";"TFT-320x240";1;"TFT_320x240";;;
