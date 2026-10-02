@@ -96,7 +96,7 @@
 		(property "Reference" "J4"
 			(at 1.25 -2.8 0)
 			(layer "F.SilkS")
-			(uuid "7e60b50e-d432-4390-84f6-d20d52f49964")
+			(uuid "82f6d2e3-e3c2-44a0-ac56-a0287690d77e")
 			(effects
 				(font
 					(size 1 1)
@@ -107,7 +107,7 @@
 		(property "Value" "Conn_01x02_Socket"
 			(at 1.5 5 0)
 			(layer "F.Fab")
-			(uuid "e2deeec8-0913-4f21-9aec-0e563f01c635")
+			(uuid "acaf8126-ddc9-411d-870a-1621bb8602e6")
 			(effects
 				(font
 					(size 1 1)
@@ -119,7 +119,7 @@
 			(at 0 0 0)
 			(layer "F.Fab")
 			(hide yes)
-			(uuid "d74f5aac-57ab-4828-a9a1-fa5a6b3a0f83")
+			(uuid "1795a775-cc84-4623-8dce-7a856a078ddd")
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -130,7 +130,7 @@
 			(at 0 0 0)
 			(layer "F.Fab")
 			(hide yes)
-			(uuid "e85a9fbd-7865-46a1-954c-320fc7a77036")
+			(uuid "17a56458-24f5-4ed6-9213-7be59a684fd8")
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -153,12 +153,6 @@
 		(path "/ad00028f-f0dd-4734-a425-2bac8b28f562")
 		(sheetname "/")
 		(sheetfile "maratui.kicad_sch")
-		(units
-			(unit
-				(name "A")
-				(pins "1" "2")
-			)
-		)
 		(attr through_hole)
 		(duplicate_pad_numbers_are_jumpers no)
 		(fp_line
@@ -376,9 +370,9 @@
 		(uuid "36289074-2c24-4c38-be2e-5d5ac5d450a8")
 		(at 106.5 157.18 180)
 		(property "Reference" "U2"
-			(at 4.5 0.68 0)
+			(at -13.4 -11.2 180)
 			(layer "F.SilkS")
-			(uuid "d456717a-815c-47bd-8bec-e34d8c9092f9")
+			(uuid "728f2295-9f7b-4e7c-beca-f37f27c97d0d")
 			(effects
 				(font
 					(size 1.000063 1.000063)
@@ -387,10 +381,9 @@
 			)
 		)
 		(property "Value" "HX711"
-			(at -5.5 2.68 0)
+			(at 0 12.6 180)
 			(layer "F.Fab")
-			(hide yes)
-			(uuid "d1becb75-8192-4655-93e6-fec5175c5c7b")
+			(uuid "427d44e8-352e-47d1-96f0-a0e9caf37493")
 			(effects
 				(font
 					(size 1.001969 1.001969)
@@ -399,10 +392,10 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 0 0 0)
+			(at 0 0 180)
 			(layer "F.Fab")
 			(hide yes)
-			(uuid "6456a364-32a0-4234-8b08-c05590452f4d")
+			(uuid "09b76eed-b4fd-4f68-9952-3481d2111924")
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -410,26 +403,13 @@
 			)
 		)
 		(property "Description" ""
-			(at 0 0 0)
+			(at 0 0 180)
 			(layer "F.Fab")
 			(hide yes)
-			(uuid "cdccdb8e-d1bc-491d-87ee-1f2dfdcea8c7")
+			(uuid "8e047203-e37f-4a6b-bca2-5373fc9107be")
 			(effects
 				(font
 					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MANUFACTURER" ""
-			(at 0 0 180)
-			(unlocked yes)
-			(layer "F.Fab")
-			(hide yes)
-			(uuid "584cb7b9-3377-4f9c-9541-2e5e42216ea8")
-			(effects
-				(font
-					(size 1 1)
-					(thickness 0.15)
 				)
 			)
 		)
@@ -437,12 +417,6 @@
 		(path "/6ccfdd5c-2e5c-4c9e-93a4-5a3bf2698e1b")
 		(sheetname "/")
 		(sheetfile "maratui.kicad_sch")
-		(units
-			(unit
-				(name "A")
-				(pins "1" "2" "3" "4" "5" "6" "7" "9" "8" "10")
-			)
-		)
 		(attr through_hole)
 		(duplicate_pad_numbers_are_jumpers no)
 		(fp_line
@@ -565,6 +539,58 @@
 			(layer "F.Fab")
 			(uuid "31dbec42-3405-41c0-9ee4-8133061e3c85")
 		)
+		(fp_text user "V3.3"
+			(at 7.5 4.5 180)
+			(unlocked yes)
+			(layer "F.SilkS")
+			(uuid "d0c9cacc-a452-4196-9ffb-feb161b31f74")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.1)
+				)
+				(justify left bottom)
+			)
+		)
+		(fp_text user "CLK"
+			(at 7.5 2 180)
+			(unlocked yes)
+			(layer "F.SilkS")
+			(uuid "65cef741-adf4-4b37-ae5e-593c1ab90112")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.1)
+				)
+				(justify left bottom)
+			)
+		)
+		(fp_text user "DAT"
+			(at 7.5 -0.5 180)
+			(unlocked yes)
+			(layer "F.SilkS")
+			(uuid "314e312a-2e2a-49a7-bf23-73b41cff3373")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.1)
+				)
+				(justify left bottom)
+			)
+		)
+		(fp_text user "GND"
+			(at 7.5 -3.168242 180)
+			(unlocked yes)
+			(layer "F.SilkS")
+			(uuid "a743d6db-2f40-4159-8dbf-95572a41b4b8")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.1)
+				)
+				(justify left bottom)
+			)
+		)
 		(pad "7" thru_hole circle
 			(at 12 3.8 180)
 			(size 1.8796 1.8796)
@@ -630,7 +656,7 @@
 			(at 1.27246 -1.395187 0)
 			(unlocked yes)
 			(layer "F.SilkS")
-			(uuid "c4680f84-277f-4912-b4cf-13a9c6a72c2d")
+			(uuid "2f6b79dc-efdf-4adc-93f9-c784efab033f")
 			(effects
 				(font
 					(size 1 1)
@@ -642,7 +668,7 @@
 			(at -0.22754 -1.395187 0)
 			(unlocked yes)
 			(layer "F.Fab")
-			(uuid "1e983aeb-e985-4468-827b-1765fad4695e")
+			(uuid "a4909691-54d3-46da-bc6e-d44cfa961c88")
 			(effects
 				(font
 					(size 1 1)
@@ -655,7 +681,7 @@
 			(unlocked yes)
 			(layer "F.Fab")
 			(hide yes)
-			(uuid "c2432b7c-279f-4fdf-873d-055e2cbdf833")
+			(uuid "4909f43d-b3ba-4058-bd55-f24398dbe083")
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -667,7 +693,7 @@
 			(unlocked yes)
 			(layer "F.Fab")
 			(hide yes)
-			(uuid "cfed86f6-19ff-4fff-bbdc-a82d3dd44760")
+			(uuid "b73ba244-b6f2-4756-863b-ec4aea8e8270")
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -677,15 +703,6 @@
 		(path "/4c422289-34de-4e00-82dd-4e77fb31ad4f")
 		(sheetname "/")
 		(sheetfile "maratui.kicad_sch")
-		(units
-			(unit
-				(name "A")
-				(pins "30" "15" "29" "14" "28" "13" "27" "12" "26" "11" "25" "10" "24"
-					"9" "23" "8" "22" "7" "21" "6" "20" "5" "19" "4" "18" "3" "17" "2" "16"
-					"1"
-				)
-			)
-		)
 		(duplicate_pad_numbers_are_jumpers no)
 		(fp_rect
 			(start -13.33 -26.4)
@@ -708,6 +725,50 @@
 			(fill no)
 			(layer "F.SilkS")
 			(uuid "f98de915-d2e1-42db-8913-2a3fb41e5b98")
+		)
+		(fp_circle
+			(center 12.43 -23.86)
+			(end 12.43 -22.36)
+			(stroke
+				(width 0.1)
+				(type default)
+			)
+			(fill no)
+			(layer "Dwgs.User")
+			(uuid "4c39df77-af0a-40d1-994f-ab1d3c5886b8")
+		)
+		(fp_circle
+			(center -10.57 -23.86)
+			(end -10.57 -22.36)
+			(stroke
+				(width 0.1)
+				(type default)
+			)
+			(fill no)
+			(layer "Dwgs.User")
+			(uuid "797870b3-cb3e-42af-8b63-5c4c1547a02e")
+		)
+		(fp_circle
+			(center 12.43 22.14)
+			(end 12.43 23.64)
+			(stroke
+				(width 0.1)
+				(type default)
+			)
+			(fill no)
+			(layer "Dwgs.User")
+			(uuid "14298034-37e8-4241-95e2-4fcf7c9eb33a")
+		)
+		(fp_circle
+			(center -10.57 22.14)
+			(end -10.57 23.64)
+			(stroke
+				(width 0.1)
+				(type default)
+			)
+			(fill no)
+			(layer "Dwgs.User")
+			(uuid "0cecc0bb-fcf6-4c43-8138-3aafdd7f3440")
 		)
 		(fp_text user "GPIO23"
 			(at 6.5 -18 90)
@@ -1496,9 +1557,9 @@
 		(uuid "ead87d41-4da8-4bb9-85ce-49790e5be996")
 		(at 71 157.18 180)
 		(property "Reference" "U3"
-			(at -1 -0.32 0)
+			(at -13.4 -11.2 180)
 			(layer "F.SilkS")
-			(uuid "35122b6e-0be9-4a01-bd11-ed879dd9e9c8")
+			(uuid "bd59bf55-8963-45e4-aea5-1d3bf49c8c50")
 			(effects
 				(font
 					(size 1.000063 1.000063)
@@ -1507,9 +1568,9 @@
 			)
 		)
 		(property "Value" "HX711"
-			(at 0 12.6 0)
+			(at 0 12.6 180)
 			(layer "F.Fab")
-			(uuid "5d873089-13ee-4a70-aad1-5e2b09f7297e")
+			(uuid "33bde68a-0705-4b00-997d-7819e2e10a20")
 			(effects
 				(font
 					(size 1.001969 1.001969)
@@ -1518,10 +1579,10 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 0 0 0)
+			(at 0 0 180)
 			(layer "F.Fab")
 			(hide yes)
-			(uuid "5b3d49fc-9260-4cb3-8fc2-5d559b79320d")
+			(uuid "cda46502-5477-436c-8999-f0d2ebc6cd9a")
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1529,26 +1590,13 @@
 			)
 		)
 		(property "Description" ""
-			(at 0 0 0)
+			(at 0 0 180)
 			(layer "F.Fab")
 			(hide yes)
-			(uuid "26f8cbfd-d9b1-455f-bb8e-13bf841b0f67")
+			(uuid "126fd3fa-fc70-40bb-a3ea-c258cacbb0e6")
 			(effects
 				(font
 					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MANUFACTURER" ""
-			(at 0 0 180)
-			(unlocked yes)
-			(layer "F.Fab")
-			(hide yes)
-			(uuid "094c9a57-32df-41f8-8a1d-ab9b1ea22cb3")
-			(effects
-				(font
-					(size 1 1)
-					(thickness 0.15)
 				)
 			)
 		)
@@ -1556,12 +1604,6 @@
 		(path "/37768969-f1fa-4a3b-87b8-28d8c822f61e")
 		(sheetname "/")
 		(sheetfile "maratui.kicad_sch")
-		(units
-			(unit
-				(name "A")
-				(pins "1" "2" "3" "4" "5" "6" "7" "9" "8" "10")
-			)
-		)
 		(attr through_hole)
 		(duplicate_pad_numbers_are_jumpers no)
 		(fp_line
@@ -1684,11 +1726,37 @@
 			(layer "F.Fab")
 			(uuid "80d563d9-98df-4134-a261-fa48818f6915")
 		)
-		(fp_text user "DAT"
-			(at 7.233611 -0.5 180)
+		(fp_text user "V3.3"
+			(at 7.5 4.5 180)
 			(unlocked yes)
 			(layer "F.SilkS")
-			(uuid "e5ba2aa7-1d57-4115-a269-a0b9055a9e20")
+			(uuid "97ee821a-44b5-4b57-b909-b909367abb03")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.1)
+				)
+				(justify left bottom)
+			)
+		)
+		(fp_text user "CLK"
+			(at 7.5 2 180)
+			(unlocked yes)
+			(layer "F.SilkS")
+			(uuid "b2340417-606d-4b07-be4d-9bc7fe7bc7b2")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.1)
+				)
+				(justify left bottom)
+			)
+		)
+		(fp_text user "DAT"
+			(at 7.5 -0.5 180)
+			(unlocked yes)
+			(layer "F.SilkS")
+			(uuid "43fdd357-3888-4323-8777-55d78b150fe1")
 			(effects
 				(font
 					(size 1 1)
@@ -1698,36 +1766,10 @@
 			)
 		)
 		(fp_text user "GND"
-			(at 7 4.5 180)
+			(at 7.5 -3.168242 180)
 			(unlocked yes)
 			(layer "F.SilkS")
-			(uuid "9b35a6fc-a944-44d7-b37d-bfb96ec465e3")
-			(effects
-				(font
-					(size 1 1)
-					(thickness 0.1)
-				)
-				(justify left bottom)
-			)
-		)
-		(fp_text user "SCK"
-			(at 7 2 180)
-			(unlocked yes)
-			(layer "F.SilkS")
-			(uuid "4423c778-3703-421f-ac72-30bd674748d2")
-			(effects
-				(font
-					(size 1 1)
-					(thickness 0.1)
-				)
-				(justify left bottom)
-			)
-		)
-		(fp_text user "V3,3"
-			(at 6.92673 -3.288005 180)
-			(unlocked yes)
-			(layer "F.SilkS")
-			(uuid "fa2a8d1f-51f7-480d-9af4-9da0a0cdb2cf")
+			(uuid "10e18269-328e-4d56-a9b9-a5e42ee5e220")
 			(effects
 				(font
 					(size 1 1)
@@ -1802,7 +1844,7 @@
 		(property "Reference" "J2"
 			(at 1.25 -2.8 0)
 			(layer "F.SilkS")
-			(uuid "6420d832-fd37-4e55-810a-2a39530f9377")
+			(uuid "0c4d5988-6c16-4d87-b207-7c2c917df3b6")
 			(effects
 				(font
 					(size 1 1)
@@ -1813,7 +1855,7 @@
 		(property "Value" "Button"
 			(at 1 -4 0)
 			(layer "F.Fab")
-			(uuid "077f2433-5f3c-4666-85b6-467b2cc9e96e")
+			(uuid "deb86b12-e665-418d-9d2a-a5a2b74685e9")
 			(effects
 				(font
 					(size 1 1)
@@ -1825,7 +1867,7 @@
 			(at 0 0 0)
 			(layer "F.Fab")
 			(hide yes)
-			(uuid "00119d7d-6a1e-4ac9-b17d-e04bef0f2b72")
+			(uuid "73dbcd1e-eb2c-4898-b69d-2fa36de5c4b4")
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1836,7 +1878,7 @@
 			(at 0 0 0)
 			(layer "F.Fab")
 			(hide yes)
-			(uuid "96ee1144-fefa-41a7-a6b6-3234b618003c")
+			(uuid "67ebec98-0e33-46e0-a607-1247e8e7a39c")
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1859,12 +1901,6 @@
 		(path "/2208e549-6c6f-4842-8e4c-452722509577")
 		(sheetname "/")
 		(sheetfile "maratui.kicad_sch")
-		(units
-			(unit
-				(name "A")
-				(pins "1" "2")
-			)
-		)
 		(attr through_hole)
 		(duplicate_pad_numbers_are_jumpers no)
 		(fp_line
@@ -2084,7 +2120,7 @@
 		(property "Reference" "U4"
 			(at -2.85 3.04 270)
 			(layer "B.SilkS")
-			(uuid "438315ba-16d3-43e7-b9ac-38203f9c8ae1")
+			(uuid "37eec67c-f158-4d09-a48c-f3581cdfc622")
 			(effects
 				(font
 					(size 1 1)
@@ -2096,7 +2132,7 @@
 		(property "Value" "TFT_320x240"
 			(at -2.85 4.54 270)
 			(layer "B.Fab")
-			(uuid "9c80d7d7-8b53-44b2-bdee-e8ac6f8fd7d3")
+			(uuid "ce40ba03-b29f-4ad7-a2ad-6fa1ff616447")
 			(effects
 				(font
 					(size 1 1)
@@ -2109,7 +2145,7 @@
 			(at 0 0 270)
 			(layer "B.Fab")
 			(hide yes)
-			(uuid "b64ec514-5e71-4fa2-83df-58ac63fc8a17")
+			(uuid "a776d1c4-c4cd-44be-b865-89869189036d")
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2121,7 +2157,7 @@
 			(at 0 0 270)
 			(layer "B.Fab")
 			(hide yes)
-			(uuid "8d3ef16d-1b7b-43b5-a80f-b4ac77892910")
+			(uuid "0523999a-517f-4bf0-9ca5-fb1e4bcc146e")
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2132,12 +2168,6 @@
 		(path "/db498fb9-17c8-44ab-bf76-346e3f755422")
 		(sheetname "/")
 		(sheetfile "maratui.kicad_sch")
-		(units
-			(unit
-				(name "A")
-				(pins "1" "2" "3" "4" "5" "6" "7" "8" "9" "10" "11" "12" "13" "14")
-			)
-		)
 		(attr through_hole)
 		(duplicate_pad_numbers_are_jumpers no)
 		(fp_line
@@ -2334,6 +2364,110 @@
 			(layer "B.CrtYd")
 			(uuid "13934682-b9a6-4caa-8311-28986d9147fb")
 		)
+		(fp_text user "LED"
+			(at 1 6.514645 0)
+			(unlocked yes)
+			(layer "B.SilkS")
+			(uuid "ea63918f-3618-4f8a-9347-35ce4fdf3160")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.1)
+				)
+				(justify left bottom mirror)
+			)
+		)
+		(fp_text user "SCK"
+			(at -2 6.514645 0)
+			(unlocked yes)
+			(layer "B.SilkS")
+			(uuid "d715496a-c8ba-458b-a142-4b45889f503d")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.1)
+				)
+				(justify left bottom mirror)
+			)
+		)
+		(fp_text user "DC"
+			(at -7 6.514645 0)
+			(unlocked yes)
+			(layer "B.SilkS")
+			(uuid "4c1219b9-d900-47fd-91f4-4c01a088c9c2")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.1)
+				)
+				(justify left bottom mirror)
+			)
+		)
+		(fp_text user "CS"
+			(at -12 6.514645 0)
+			(unlocked yes)
+			(layer "B.SilkS")
+			(uuid "a9cee1e9-ae6a-4d0f-bf1b-7e5ebc75a1c0")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.1)
+				)
+				(justify left bottom mirror)
+			)
+		)
+		(fp_text user "GND"
+			(at -14.5 6.514645 0)
+			(unlocked yes)
+			(layer "B.SilkS")
+			(uuid "5cb6bfcb-467a-4340-869c-d885508649fa")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.1)
+				)
+				(justify left bottom mirror)
+			)
+		)
+		(fp_text user "VCC"
+			(at -17 6.514645 0)
+			(unlocked yes)
+			(layer "B.SilkS")
+			(uuid "941c1f7a-50c7-468e-bf42-cb1784f39ba0")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.1)
+				)
+				(justify left bottom mirror)
+			)
+		)
+		(fp_text user "Reset"
+			(at -9.5 7.014645 0)
+			(unlocked yes)
+			(layer "B.SilkS")
+			(uuid "db1a715a-5d15-40b7-814f-fb4e868b2cc8")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.1)
+				)
+				(justify left bottom mirror)
+			)
+		)
+		(fp_text user "SDI Mosi"
+			(at -4.5 8.5 0)
+			(unlocked yes)
+			(layer "B.SilkS")
+			(uuid "cfd7211e-c1df-4343-a2c8-897976d4dda3")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.1)
+				)
+				(justify left bottom mirror)
+			)
+		)
 		(fp_text user "TFT 320x240, 2.8\""
 			(at 0.746 55.99 270)
 			(layer "B.SilkS")
@@ -2498,7 +2632,7 @@
 		(embedded_fonts no)
 		(model "${KICAD_USER_WAAGE}/LCD_MSP2807_fusion.step"
 			(offset
-				(xyz 0 40.5 2.5)
+				(xyz 0 41.5 3.5)
 			)
 			(scale
 				(xyz 1 1 1)
