@@ -81,14 +81,44 @@ Non-standard components are bundled in `lib/` so the project opens without missi
 
 Gerber files for fabrication: `gerbers/gerbers.zip` (single board, scale cells included)
 
+Tested with JLCPCB default 2-layer settings.
+
 ## 3D-Printed Parts (`3d-print/`)
 
-Printable case parts for the dual load-cell scale mount:
+Printable parts for the dual load-cell scale mount and the display enclosure:
 
 | File | Description |
 |------|-------------|
 | `doppelfuss.stp` / `ImageToStl.com_doppelfuss.stl` | Double foot — mounts both load cells |
 | `auflage_v2.stp` / `ImageToStl.com_auflage_v2.stl` | Scale platform/tray (v2) |
 | `CCR10S_ImageToStl.com_auflage_v2.gcode` | Pre-sliced G-code for the platform (Creality CR-10S) |
+| `00000000000_-_geh_koerper.stp` | Display enclosure — body (lower shell) |
+| `00000000000_-_geh_deckel.stp` | Display enclosure — lid (upper shell) |
 
-Tested with JLCPCB default 2-layer settings.
+## CAD Models
+
+| File | Description |
+|------|-------------|
+| `Plarine_cps.step` | Full board assembly (PCB + ESP32 DevKit + display + HX711 modules) as STEP |
+| `creo/Maratui_Waage_Display_enclosure.zip` | Native PTC Creo source data for the display enclosure (see below) |
+
+### Creo source data (`creo/`)
+
+`Maratui_Waage_Display_enclosure.zip` holds the complete Creo Parametric dataset
+(~600 `.prt`/`.asm` files, ~53 MB unpacked) that the STEP exports above were made from:
+
+| File in the archive | Content |
+|---------------------|---------|
+| `00000000000_-_display_halter_cp.asm` | Enclosure assembly (display holder) — start here |
+| `00000000000_-_display_halt_skel.prt` | Skeleton model (reference geometry the shells are built on) |
+| `00000000000_-_geh_koerper.prt` | Enclosure body (lower shell) |
+| `00000000000_-_geh_deckel.prt` | Enclosure lid (upper shell) |
+| `1111111111_-_platine_imp.asm` | Imported board assembly: PCB with ESP32 DevKit, 2.8" display and both HX711 modules |
+| all other files | Imported component models (ESP32 DevKit, MSP2807 display, HX711, JST connectors, tactile switch, …) |
+
+To open it, unzip the archive into an empty Creo working directory and open
+`00000000000_-_display_halter_cp.asm` (or `1111111111_-_platine_imp.asm` for the board alone). The files carry Creo version suffixes
+(`.prt.1`, `.asm.1`) — keep them as they are. The archive is stored as a single
+zip on purpose: the files are binary, so individual git diffs would be meaningless.
+
+If you don't use Creo, work with the STEP exports (`3d-print/*.stp`, `Plarine_cps.step`) instead.
