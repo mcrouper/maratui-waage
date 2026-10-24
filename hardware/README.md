@@ -89,12 +89,16 @@ Printable parts (STEP source + STL for slicing; versions in the file name):
 
 | File | Description |
 |------|-------------|
-| `geh_koerper_V3.stp` / `geh_koerper_v3.stl` | Enclosure body (v3) — display, ESP32 and PCB |
-| `geh_deckel_V3.stp` / `geh_deckel_v3.stl` | Enclosure lid (v3) |
+| `geh_koerper_V3.stp` / `geh_koerper_v3.stl` | Enclosure body (v3) — rear shell for ESP32 and PCB, cable/USB openings |
+| `geh_deckel_V3.stp` / `geh_deckel_v3.stl` | Enclosure lid (v3) — front bezel with the display window |
 | `doppelfuss_V2.stp` / `doppelfuss_v2.stl` | Double foot (v2) — mounts both load cells |
-| `auflage_v2.stp` / `auflage_v2.stl` | Scale platform/tray (v2) |
-| `staender_winkel.stl` | Stand angle bracket |
-| `strebe.stl` | Strut / brace holder |
+| `auflage_v2.stp` / `auflage_v2.stl` | Scale platform (v2) — print 2×, one per load cell |
+| `staender_winkel.stp` / `staender_winkel.stl` | Display stand side bracket — print 2× |
+| `strebe.stp` / `strebe.stl` | Cross strut joining the two stand brackets |
+| `maratui_baugruppe.step` | Complete assembly: scale + display on its stand (load cells simplified) |
+| `assemble.py` | Regenerates the assembly from the part STEPs (`pip install build123d`, run in this folder) |
+
+![Assembly](renders/baugruppe.png)
 
 ## CAD Models
 
