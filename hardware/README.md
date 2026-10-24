@@ -83,12 +83,15 @@ Gerber files for fabrication: `gerbers/gerbers.zip` (single board, scale cells i
 
 ## 3D-Printed Parts (`3d-print/`)
 
-Printable case parts for the dual load-cell scale mount:
+Printable parts (STEP source + STL for slicing; versions in the file name):
 
 | File | Description |
 |------|-------------|
-| `doppelfuss.stp` / `ImageToStl.com_doppelfuss.stl` | Double foot — mounts both load cells |
-| `auflage_v2.stp` / `ImageToStl.com_auflage_v2.stl` | Scale platform/tray (v2) |
-| `CCR10S_ImageToStl.com_auflage_v2.gcode` | Pre-sliced G-code for the platform (Creality CR-10S) |
+| `geh_koerper_V3.stp` / `geh_koerper_v3.stl` | Enclosure body (v3) — display, ESP32 and PCB |
+| `geh_deckel_V3.stp` / `geh_deckel_v3.stl` | Enclosure lid (v3) |
+| `doppelfuss_V2.stp` / `doppelfuss_v2.stl` | Double foot (v2) — mounts both load cells |
+| `auflage_v2.stp` / `auflage_v2.stl` | Scale platform/tray (v2) |
+| `staender_winkel.stl` | Stand angle bracket |
+| `strebe.stl` | Strut / brace holder |
 
 Tested with JLCPCB default 2-layer settings.
