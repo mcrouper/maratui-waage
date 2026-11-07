@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use mousefood::embedded_graphics::pixelcolor::Rgb565;
 use mousefood::embedded_graphics::prelude::{DrawTarget, OriginDimensions};
@@ -7,14 +7,17 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Paragraph, Widget};
+use ratatui::widgets::{Block, BorderType, Clear, Paragraph, Widget};
 #[cfg(feature = "scale-test")]
 use tui_widgets::big_text::{BigText, PixelSize};
 
 use crate::screens::screen::{Board, cells_to_pixels, display_cell_area};
-use crate::smooth_digits::{LARGE_DIGITS, SMALL_DIGITS, SmoothField, rgb565_from_tui};
+use crate::smooth_digits::{
+    LARGE_DIGITS, SMALL_DIGITS, SmoothField, WATER_DIGITS, rgb565_from_tui,
+};
 use crate::state::GlobalAppState;
 use crate::telemetry::{MachineMode, TelemetryFrame};
+use crate::water::TANK_CAPACITY_ML;
 
 // Dashboard palette. RGB values are rounded to the display's RGB565 when drawn; black is the
 // display background, so `STYLE_HIDDEN` makes the empty part of a bar invisible.
@@ -39,6 +42,17 @@ const STYLE_BOILER_HEATING_FILL: Style = Style::new().fg(Color::Rgb(0x7A, 0x7F, 
 const STYLE_BOILER_READY: Style = Style::new().fg(Color::Rgb(0x5E, 0x6E, 0x45));
 const STYLE_BOILER_TARGET: Style = Style::new().fg(Color::Rgb(0x3E, 0x5B, 0x4A));
 const STYLE_NO_WATER: Style = Style::new().fg(Color::Rgb(0x4F, 0x6D, 0x8A));
+const STYLE_WATER_VALUE: Style = Style::new().fg(Color::Rgb(0xE8, 0xC9, 0xA0));
+const STYLE_WATER_BAR: Style = Style::new().fg(Color::Rgb(0x4D, 0x7F, 0xB0));
+const STYLE_WATER_BAR_EMPTY: Style = Style::new().fg(Color::Rgb(0x50, 0x50, 0x50));
+/// Remaining water value and bar once the tank is low, and the popup's frame and heading.
+const STYLE_WATER_LOW: Style = Style::new().fg(Color::Rgb(0xFF, 0x5A, 0x30));
+/// Low-water popup body. Its background must differ from the display's black so Ratatui
+/// repaints every cell it covers, including those under the smooth Timer/Weight digits.
+const COLOR_WATER_POPUP_BG: Color = Color::Rgb(0x3A, 0x0C, 0x08);
+const STYLE_WATER_POPUP: Style = Style::new()
+    .fg(Color::Rgb(0xFF, 0xE0, 0xC8))
+    .bg(COLOR_WATER_POPUP_BG);
 
 const BOILER_SCALE_MAX: u16 = 160;
 // Shot gauge ("%") tracks extracted weight, not elapsed time: 40g (400 decigrams) == 100%.
@@ -47,6 +61,8 @@ const HX_SCALE_MIN: f64 = 60.0;
 const HX_SCALE_MAX: f64 = 110.0;
 const HX_IDEAL_LOW: f64 = 90.0;
 const HX_IDEAL_HIGH: f64 = 95.0;
+/// Width of the tank bar in the banner, in cells.
+const WATER_BAR_CELLS: u16 = 4;
 
 #[derive(Default)]
 pub struct Dashboard;
@@ -61,14 +77,21 @@ impl Board for Dashboard {
 
         let [banner_area, content_area, boiler_area] = dashboard_rows(area);
 
-        let [mode_area, counter_area] =
-            Layout::horizontal(Constraint::from_fills([1, 1])).areas(banner_area);
+        let [mode_area, counter_area] = banner_halves(banner_area);
+        let [cups_area, _, water_bar_area] = water_banner_areas(counter_area);
 
         render_mode_banner(t_frame, mode_area, buf);
-        render_cup_counter(state.cup_counter, counter_area, buf);
+        render_cup_counter(state.cup_counter, cups_area, buf);
+        render_water_bar(state, water_bar_area, buf);
         render_boiler_gauge(t_frame, boiler_area, buf);
 
         render_main_content(state, t_frame, content_area, frame);
+
+        // Low-water popup over the Timer/Weight column (never during a shot).
+        if state.water_popup_visible(Instant::now()) {
+            let [_, timer_col, _] = content_columns(content_area);
+            render_water_popup(state, timer_col, frame.buffer_mut());
+        }
     }
 }
 
@@ -79,6 +102,7 @@ pub struct DashboardDigits {
     timer: SmoothField,
     weight: SmoothField,
     hx: SmoothField,
+    water: SmoothField,
 }
 
 // `LARGE_DIGITS` boxes keep ~11 px below the digits free for the comma's descender, so
@@ -95,6 +119,7 @@ impl Default for DashboardDigits {
                 .nudged_down(WEIGHT_DIGITS_NUDGE_PX)
                 .with_sign_slot(),
             hx: SmoothField::new(&SMALL_DIGITS),
+            water: SmoothField::new(&WATER_DIGITS),
         }
     }
 }
@@ -105,6 +130,7 @@ impl DashboardDigits {
         self.timer.invalidate();
         self.weight.invalidate();
         self.hx.invalidate();
+        self.water.invalidate();
     }
 
     pub fn render<D>(&mut self, state: &GlobalAppState, display: &mut D) -> Result<(), D::Error>
@@ -121,12 +147,23 @@ impl DashboardDigits {
 
         let areas = value_areas(display_cell_area(display));
 
-        let secs = current_extraction_secs(state).to_string();
-        self.timer
-            .draw(display, cells_to_pixels(areas.timer), &secs, style_color(timer_style(state)))?;
-        let (weight, weight_style) = weight_text(state);
-        self.weight
-            .draw(display, cells_to_pixels(areas.weight), &weight, style_color(weight_style))?;
+        // The low-water popup covers the Timer and Weight; repaint them in full once it's gone.
+        if state.water_popup_visible(Instant::now()) {
+            self.timer.invalidate();
+            self.weight.invalidate();
+        } else {
+            let secs = current_extraction_secs(state).to_string();
+            let timer_color = style_color(timer_style(state));
+            self.timer
+                .draw(display, cells_to_pixels(areas.timer), &secs, timer_color)?;
+            let (weight, weight_style) = weight_text(state);
+            self.weight
+                .draw(display, cells_to_pixels(areas.weight), &weight, style_color(weight_style))?;
+        }
+        let water_color = style_color(water_style(state));
+        let water = format!("{}L", liters_text(state.water.remaining_ml()));
+        self.water
+            .draw(display, cells_to_pixels(areas.water), &water, water_color)?;
         let hx = format!("{}°C", t_frame.hx_now_c);
         self.hx
             .draw(display, cells_to_pixels(areas.hx), &hx, rgb565_from_tui(COLOR_HX_VALUE))
@@ -138,10 +175,13 @@ struct ValueAreas {
     timer: Rect,
     weight: Rect,
     hx: Rect,
+    water: Rect,
 }
 
 fn value_areas(area: Rect) -> ValueAreas {
-    let [_, content_area, _] = dashboard_rows(area);
+    let [banner_area, content_area, _] = dashboard_rows(area);
+    let [_, counter_area] = banner_halves(banner_area);
+    let [_, water_value_area, _] = water_banner_areas(counter_area);
     let [info_col, timer_col, _] = content_columns(content_area);
     let [timer_area, weight_area] = timer_column_halves(timer_col);
     let [hx_label_area, _, _] = info_rows(Block::bordered().inner(info_col));
@@ -155,11 +195,30 @@ fn value_areas(area: Rect) -> ValueAreas {
             height: 1,
             ..hx_label_area
         },
+        water: water_value_area,
     }
 }
 
 fn style_color(style: Style) -> Rgb565 {
     rgb565_from_tui(style.fg.unwrap_or(Color::Reset))
+}
+
+/// Mode banner | cup counter and tank level.
+fn banner_halves(banner_area: Rect) -> [Rect; 2] {
+    Layout::horizontal(Constraint::from_fills([1, 1])).areas(banner_area)
+}
+
+/// Cup counter, remaining water value (drawn by `DashboardDigits`) and tank bar.
+fn water_banner_areas(counter_area: Rect) -> [Rect; 3] {
+    let [cups, _, value, _, bar] = Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Length(6),
+        Constraint::Length(1),
+        Constraint::Length(WATER_BAR_CELLS),
+    ])
+    .areas(counter_area);
+    [cups, value, bar]
 }
 
 /// banner (1) | main (fill) | boiler (3)
@@ -246,10 +305,74 @@ fn render_cup_counter(count: Option<u64>, area: Rect, buf: &mut Buffer) {
         return;
     };
 
-    Paragraph::new(Line::from(format!("Cups brewed: {cups}")))
+    Paragraph::new(Line::from(format!("{cups} cups")))
         .centered()
         .style(STYLE_HEADER)
         .render(area, buf);
+}
+
+/// Litres with two decimals and a decimal comma, e.g. 1850 ml -> "1,85".
+fn liters_text(ml: u32) -> String {
+    let centiliters = (ml + 5) / 10;
+    format!("{},{:02}", centiliters / 100, centiliters % 100)
+}
+
+fn water_style(state: &GlobalAppState) -> Style {
+    if state.water.is_low() {
+        STYLE_WATER_LOW
+    } else {
+        STYLE_WATER_VALUE
+    }
+}
+
+/// Tank level bar next to the remaining water value.
+fn render_water_bar(state: &GlobalAppState, area: Rect, buf: &mut Buffer) {
+    let cells = u32::from(area.width);
+    let filled = (state.water.remaining_ml() * cells + TANK_CAPACITY_ML / 2) / TANK_CAPACITY_ML;
+    let fill_style = if state.water.is_low() {
+        STYLE_WATER_LOW
+    } else {
+        STYLE_WATER_BAR
+    };
+    for i in 0..area.width {
+        let (ch, style) = if u32::from(i) < filled {
+            ("█", fill_style)
+        } else {
+            ("░", STYLE_WATER_BAR_EMPTY)
+        };
+        buf.set_string(area.x + i, area.y, ch, style);
+    }
+}
+
+/// Refill prompt; confirmed with a short press (see `AppStateMachine::handle_button_press`).
+fn render_water_popup(state: &GlobalAppState, area: Rect, buf: &mut Buffer) {
+    Clear.render(area, buf);
+    let block = Block::bordered()
+        .border_type(BorderType::Double)
+        .border_style(STYLE_WATER_LOW.bg(COLOR_WATER_POPUP_BG))
+        .style(STYLE_WATER_POPUP);
+    let inner = block.inner(area);
+    block.render(area, buf);
+
+    let rest = format!("Rest: {} L", liters_text(state.water.remaining_ml()));
+    let lines = vec![
+        Line::styled("WASSER FAST LEER", STYLE_WATER_LOW.bg(COLOR_WATER_POPUP_BG)),
+        Line::raw(""),
+        Line::raw(rest),
+        Line::raw(""),
+        Line::raw("Wasser nachgefüllt?"),
+        Line::raw("Taste kurz drücken"),
+    ];
+    let [_, text_area, _] = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(lines.len() as u16),
+        Constraint::Fill(1),
+    ])
+    .areas(inner);
+    Paragraph::new(lines)
+        .centered()
+        .style(STYLE_WATER_POPUP)
+        .render(text_area, buf);
 }
 
 fn render_info_col(t_frame: &TelemetryFrame, area: Rect, buf: &mut Buffer) {
@@ -592,5 +715,18 @@ fn shot_quality_label(secs: u64) -> &'static str {
         28..=31 => "LONG SHOT",
         32..=39 => "BLONDING",
         _ => "RIP SHOT",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn liters_text_rounds_to_ten_ml() {
+        assert_eq!(liters_text(2300), "2,30");
+        assert_eq!(liters_text(1855), "1,86");
+        assert_eq!(liters_text(495), "0,50");
+        assert_eq!(liters_text(0), "0,00");
     }
 }

@@ -138,6 +138,16 @@ const GLYPH_SETS: &[GlyphSetSpec] = &[
         unit_px: 12.0,
         unit_chars: "°C",
     },
+    // Remaining tank water in the Dashboard banner, e.g. "1,85L": a single 42x14 px row.
+    GlyphSetSpec {
+        name: "WATER_DIGITS",
+        px: 14.0,
+        height: 14,
+        chars: "0123456789",
+        narrow_chars: ",",
+        unit_px: 12.0,
+        unit_chars: "L",
+    },
 ];
 
 /// Rasterize the glyph sets in `GLYPH_SETS` to 4-bit coverage bitmaps (two pixels per byte,
