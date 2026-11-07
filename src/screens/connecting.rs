@@ -15,7 +15,7 @@ const COLOR_TITLE: Color = Color::Rgb(0xC8, 0x75, 0x33);
 const COLOR_VERSION: Color = Color::Rgb(0xFF, 0xB0, 0x00);
 const COLOR_STATUS: Color = Color::Rgb(0xC8, 0x75, 0x33);
 const COLOR_PROGRESS: Color = Color::Rgb(0xC8, 0x75, 0x33);
-const COLOR_PROGRESS_TRACK: Color = Color::Gray;
+const COLOR_PROGRESS_TRACK: Color = Color::Rgb(0x7F, 0x7F, 0x7F);
 
 #[derive(Default)]
 pub struct Connecting;
