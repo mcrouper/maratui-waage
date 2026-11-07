@@ -94,6 +94,12 @@ pub enum AppEvent {
         left: Option<i32>,
         right: Option<i32>,
     },
+
+    /// Water tank level loaded from flash at boot.
+    WaterLevelRestored { remaining_ml: u32 },
+
+    /// User confirmed the tank was refilled (short press while the low-water warning shows).
+    WaterRefillConfirmed,
 }
 
 impl AppEvent {
@@ -190,6 +196,10 @@ impl std::fmt::Display for AppEvent {
             AppEvent::RawWeightUpdated { left, right } => {
                 write!(f, "Raw weight updated: left={:?} right={:?}", left, right)
             }
+            AppEvent::WaterLevelRestored { remaining_ml } => {
+                write!(f, "Water level restored: {} ml", remaining_ml)
+            }
+            AppEvent::WaterRefillConfirmed => write!(f, "Water refill confirmed"),
         }
     }
 }

@@ -10,6 +10,8 @@ use crate::button::{Button, ButtonPressType};
 use crate::home_assistant;
 use crate::screens::Screen;
 use crate::telemetry::{TelemetryFrame, update_state_with_events};
+use crate::water::{Draw, WaterTank};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 /// Application state machine
@@ -37,6 +39,8 @@ impl AppStateMachine {
                 // Tare out whatever is currently on the scale (e.g. the empty cup) so the
                 // Dashboard shows net extracted weight for this shot.
                 Self::tare_scale(state);
+                let draw = state.water.pump_started(monotonic_ms(Instant::now()));
+                log_water_draw(state, draw);
             }
 
             AppEvent::ShotEnded { duration } => {
@@ -44,6 +48,7 @@ impl AppStateMachine {
                     last_extraction_duration: Some(Duration::from_secs(duration)),
                 };
                 state.last_shot_ended_at = Some(Instant::now());
+                Self::book_pump_stop(state);
             }
 
             AppEvent::ShotAborted { .. } => {
@@ -51,6 +56,7 @@ impl AppStateMachine {
                     last_extraction_duration: None,
                 };
                 state.last_shot_ended_at = Some(Instant::now());
+                Self::book_pump_stop(state);
             }
 
             AppEvent::ModeChanged { from: _, to: _ } => {
@@ -60,6 +66,17 @@ impl AppStateMachine {
 
             AppEvent::WaterRefillNeeded { code } => {
                 state.error = Some(AppError::WaterRefillNeeded { code });
+                // The machine's own sensor says the tank is empty: trust it over the estimate.
+                state.water.mark_empty();
+            }
+
+            AppEvent::WaterLevelRestored { remaining_ml } => {
+                state.water = WaterTank::new(remaining_ml);
+            }
+
+            AppEvent::WaterRefillConfirmed => {
+                state.water.refilled();
+                info!("Water tank refilled: {} ml", state.water.remaining_ml());
             }
 
             AppEvent::WaterRefillCleared => {
@@ -173,6 +190,12 @@ impl AppStateMachine {
                 }
                 state.last_raw_weight_dg = Some(weight_dg);
                 state.weight_dg = Some(weight_dg - state.scale_tare_dg);
+                let now = Instant::now();
+                state.last_weight_at = Some(now);
+                let draw = state
+                    .water
+                    .weight_sample(monotonic_ms(now), weight_dg - state.scale_tare_dg);
+                log_water_draw(state, draw);
                 Self::publish_weight_if_due(state, Instant::now());
             }
 
@@ -264,9 +287,20 @@ impl AppStateMachine {
         }
 
         // Short press manually zeros the scale, regardless of screen — a quick way to tare
-        // without waiting for a shot to start.
+        // without waiting for a shot to start. Only while the low-water warning shows, it
+        // confirms the refill instead (a press on a dark screen just wakes it, so the warning
+        // can't be confirmed unseen).
         if let Button::Button1(ButtonPressType::Short) = button {
-            Self::tare_scale(state);
+            let now = Instant::now();
+            if state.water_warning_visible(now) {
+                let was_lit = state.backlight_should_be_on(now);
+                state.last_activity_at = Some(now);
+                if was_lit {
+                    Self::handle_event(state, AppEvent::WaterRefillConfirmed);
+                }
+            } else {
+                Self::tare_scale(state);
+            }
             return;
         }
 
@@ -294,6 +328,21 @@ impl AppStateMachine {
         {
             Self::handle_event(state, AppEvent::NextScreen);
         }
+    }
+
+    /// Book the pump run that just ended off the water tank: weighed if the scale is
+    /// available, from its duration otherwise.
+    fn book_pump_stop(state: &mut GlobalAppState) {
+        let now = Instant::now();
+        let cup_weight_dg = state.weight_dg.filter(|_| state.scale_available(now));
+        let draw = state.water.pump_stopped(monotonic_ms(now), cup_weight_dg);
+        log_water_draw(state, draw);
+    }
+
+    /// Time-based work between events: books a pump run whose cup weight never settled.
+    pub fn tick(state: &mut GlobalAppState, now: Instant) {
+        let draw = state.water.poll(monotonic_ms(now));
+        log_water_draw(state, draw);
     }
 
     /// Zero the scale: tare both cells against whatever they're currently reading, so the
@@ -486,6 +535,25 @@ fn telemetry_event_payload(event: &crate::telemetry::AppEvent, weight_dg: Option
                 from, to
             )
         }
+    }
+}
+
+/// Milliseconds since the first call — the monotonic clock `WaterTank` runs on.
+fn monotonic_ms(now: Instant) -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    let start = *START.get_or_init(|| now);
+    now.saturating_duration_since(start).as_millis() as u64
+}
+
+fn log_water_draw(state: &GlobalAppState, draw: Option<Draw>) {
+    if let Some(draw) = draw {
+        info!(
+            "Water: {} ml drawn ({:?}{}), {} ml left",
+            draw.ml,
+            draw.kind,
+            if draw.is_estimated() { ", estimated" } else { "" },
+            state.water.remaining_ml()
+        );
     }
 }
 
@@ -685,6 +753,55 @@ mod tests {
 
         assert_eq!(state.scale_tare_dg, 1334);
         assert_eq!(state.weight_dg, Some(0));
+    }
+
+    /// Dashboard on screen, backlight lit, and the tank down to the warning level.
+    fn low_water_state() -> GlobalAppState {
+        let mut state = GlobalAppState::default();
+        state.machine_state.last_frame = Some(TelemetryFrame::debug_frame());
+        state.last_uart_frame_at = Some(Instant::now());
+        state.last_activity_at = Some(Instant::now());
+        AppStateMachine::handle_event(
+            &mut state,
+            AppEvent::WaterLevelRestored {
+                remaining_ml: crate::water::LOW_WATER_ML,
+            },
+        );
+        state
+    }
+
+    #[test]
+    fn test_short_press_confirms_refill_while_water_warning_shows() {
+        let mut state = low_water_state();
+        AppStateMachine::handle_event(&mut state, AppEvent::WeightUpdated { weight_dg: 100 });
+        AppStateMachine::handle_event(&mut state, AppEvent::WeightUpdated { weight_dg: 300 });
+        assert!(state.water_warning_visible(Instant::now()));
+
+        AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Short));
+
+        assert_eq!(state.water.remaining_ml(), crate::water::TANK_CAPACITY_ML);
+        assert!(!state.water_warning_visible(Instant::now()));
+        // The press went to the refill, not to zeroing the scale.
+        assert_eq!(state.weight_dg, Some(200));
+    }
+
+    #[test]
+    fn test_short_press_on_dark_screen_only_wakes_during_water_warning() {
+        let mut state = low_water_state();
+        state.last_activity_at = Some(Instant::now() - BACKLIGHT_TIMEOUT - Duration::from_secs(1));
+
+        AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Short));
+
+        assert!(state.backlight_should_be_on(Instant::now()));
+        assert_eq!(state.water.remaining_ml(), crate::water::LOW_WATER_ML);
+    }
+
+    #[test]
+    fn test_machine_no_water_report_empties_the_tank() {
+        let mut state = GlobalAppState::default();
+        AppStateMachine::handle_event(&mut state, AppEvent::WaterRefillNeeded { code: 65 });
+        assert_eq!(state.water.remaining_ml(), 0);
+        assert_eq!(state.water.take_level_to_persist(), Some(0));
     }
 
     #[test]

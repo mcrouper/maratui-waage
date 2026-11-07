@@ -1,4 +1,5 @@
 use crate::screens::Screen;
+use crate::water::WaterTank;
 use crate::telemetry::MachineState;
 use std::{
     collections::VecDeque,
@@ -14,6 +15,13 @@ pub const BACKLIGHT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Once this elapses with no UART frame, the UI falls back to the waiting screen and
 /// the next frame to arrive starts a fresh session (terminal + graph buffers cleared).
 pub const MACHINE_OFFLINE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long without a `WeightUpdated` before the scale counts as unavailable (the HX711s
+/// deliver several readings per second).
+pub const SCALE_AVAILABLE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How long after a shot the low-water popup waits, so it doesn't cover the shot's result.
+pub const WATER_POPUP_DELAY_AFTER_SHOT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum ConnectionStatus {
@@ -195,6 +203,10 @@ pub struct GlobalAppState {
     /// Latest raw (uncalibrated) HX711 ADC count from the right cell. Only populated by the
     /// `scale-test` build variant.
     pub raw_weight_right: Option<i32>,
+    /// Water left in the tank, tracked per pump run (see `crate::water`).
+    pub water: WaterTank,
+    /// Time of the last `WeightUpdated`, to tell whether the scale is available.
+    pub last_weight_at: Option<Instant>,
 }
 
 impl Default for GlobalAppState {
@@ -228,6 +240,8 @@ impl Default for GlobalAppState {
             screen_before_calibration: None,
             raw_weight_left: None,
             raw_weight_right: None,
+            water: WaterTank::default(),
+            last_weight_at: None,
         }
     }
 }
@@ -300,6 +314,31 @@ impl GlobalAppState {
             Some(last) => now.saturating_duration_since(last) < BACKLIGHT_TIMEOUT,
             None => false,
         }
+    }
+
+    /// `true` while the scale is delivering readings.
+    pub fn scale_available(&self, now: Instant) -> bool {
+        self.last_weight_at
+            .is_some_and(|t| now.saturating_duration_since(t) <= SCALE_AVAILABLE_TIMEOUT)
+    }
+
+    /// `true` while the low-water warning is on screen, so a short press confirms the refill
+    /// instead of zeroing the scale.
+    pub fn water_warning_visible(&self, now: Instant) -> bool {
+        self.water.is_low()
+            && self.current_screen == Screen::Dashboard
+            && self.calibration_step.is_none()
+            && self.machine_online(now)
+    }
+
+    /// `true` while the warning may take over the Timer/Weight area as a popup: not during a
+    /// shot, nor while the result of the last one is still worth reading.
+    pub fn water_popup_visible(&self, now: Instant) -> bool {
+        self.water_warning_visible(now)
+            && !self.extraction_state.is_extracting()
+            && self
+                .last_shot_ended_at
+                .is_none_or(|t| now.saturating_duration_since(t) >= WATER_POPUP_DELAY_AFTER_SHOT)
     }
 
     /// Returns `true` while telemetry is fresh enough to consider the machine online
