@@ -160,6 +160,7 @@ fn run_app_hardware(mut app: impl MaraUiApp) {
     });
     app.render_image(terminal.backend_mut().display_mut());
     terminal.draw(|f| app.draw(f)).unwrap();
+    app.render_overlay(terminal.backend_mut().display_mut(), false);
 
     let (mut wifi, _) = init_wifi(modem, &app_config, nvs_partition);
     app.handle_event(AppEvent::WifiStatusChanged(ConnectionStatus::Connected));
@@ -172,6 +173,7 @@ fn run_app_hardware(mut app: impl MaraUiApp) {
         });
         app.render_image(terminal.backend_mut().display_mut());
         terminal.draw(|f| app.draw(f)).unwrap();
+        app.render_overlay(terminal.backend_mut().display_mut(), false);
 
         let stage_start = Instant::now();
         let (client, counter_rx, status_rx) = init_mqtt(&app_config);
@@ -189,6 +191,7 @@ fn run_app_hardware(mut app: impl MaraUiApp) {
     });
     app.render_image(terminal.backend_mut().display_mut());
     terminal.draw(|f| app.draw(f)).unwrap();
+    app.render_overlay(terminal.backend_mut().display_mut(), false);
 
     let stage_start = Instant::now();
     let (tx, rx) = std::sync::mpsc::channel::<TelemetryFrame>();

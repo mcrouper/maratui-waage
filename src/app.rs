@@ -1,7 +1,8 @@
 use crate::button::Button;
 use crate::run_app;
 use crate::screens::{
-    Board, CalibrationWizard, Connecting, Dashboard, DashboardDigits, Debug, Graphs, Screen,
+    Board, CalibrationWizard, Connecting, ConnectingTitle, Dashboard, DashboardDigits, Debug,
+    Graphs, Screen,
 };
 use crate::state::global_state::MqttOutboundMessage;
 use crate::state::{AppEvent, AppStateMachine, CalibrationStep, ConnectionStatus, GlobalAppState};
@@ -11,6 +12,7 @@ use mousefood::embedded_graphics::image::{Image, ImageRaw, ImageRawBE};
 use mousefood::embedded_graphics::prelude::{DrawTarget, OriginDimensions, Point};
 use mousefood::prelude::Rgb565;
 use ratatui::Frame;
+use std::cell::Cell;
 use std::time::Instant;
 
 /// Application trait to be implemented by the user
@@ -93,8 +95,23 @@ pub trait MaraUiApp {
 pub struct MaraUi {
     /// Global application state
     pub state: GlobalAppState,
+    /// Board the last `draw()` rendered, so `render_overlay` decorates exactly that frame
+    drawn_board: Cell<DrawnBoard>,
+    /// Board `render_overlay` last drew over
+    overlay_board: DrawnBoard,
     /// Smooth Dashboard digits drawn by `render_overlay`
     dashboard_digits: DashboardDigits,
+    /// Smooth start screen title drawn by `render_overlay`
+    connecting_title: ConnectingTitle,
+}
+
+/// Boards that get smooth overlay text, as far as `render_overlay` is concerned.
+#[derive(Clone, Copy, Default, PartialEq)]
+enum DrawnBoard {
+    #[default]
+    Other,
+    Connecting,
+    Dashboard,
 }
 
 /// The main application implementation
@@ -109,6 +126,7 @@ impl MaraUiApp for MaraUi {
         // Debug screen is always accessible for diagnostics.
         if !self.state.machine_online(Instant::now()) && self.state.current_screen != Screen::Debug
         {
+            self.drawn_board.set(DrawnBoard::Connecting);
             Connecting::render(&self.state, area, frame);
             return;
         }
@@ -116,10 +134,15 @@ impl MaraUiApp for MaraUi {
         // Calibration wizard takes over the whole screen while active, regardless of the
         // screen underneath (it is restored once calibration finishes or is cancelled).
         if self.state.calibration_step.is_some() {
+            self.drawn_board.set(DrawnBoard::Other);
             CalibrationWizard::render(&self.state, area, frame);
             return;
         }
 
+        self.drawn_board.set(match self.state.current_screen {
+            Screen::Dashboard => DrawnBoard::Dashboard,
+            Screen::Graphs | Screen::Debug => DrawnBoard::Other,
+        });
         match self.state.current_screen {
             Screen::Dashboard => Dashboard::render(&self.state, area, frame),
             Screen::Graphs => Graphs::render(&self.state, area, frame),
@@ -220,18 +243,19 @@ impl MaraUiApp for MaraUi {
         D: DrawTarget<Color = Rgb565> + OriginDimensions,
         D::Error: core::fmt::Debug,
     {
-        // Mirrors `draw()`'s choice of what's on screen. While anything else is shown, Ratatui
-        // paints over the digit areas, so they must be repainted in full once the Dashboard
-        // is back.
-        let dashboard_visible = self.state.machine_online(Instant::now())
-            && self.state.calibration_step.is_none()
-            && self.state.current_screen == Screen::Dashboard;
-
-        if full_redraw || !dashboard_visible {
+        // Whenever the board changes, Ratatui has just painted over the overlay areas, so they
+        // must be repainted in full.
+        let board = self.drawn_board.get();
+        if full_redraw || board != self.overlay_board {
             self.dashboard_digits.invalidate();
+            self.connecting_title.invalidate();
         }
-        if dashboard_visible {
-            self.dashboard_digits.render(&self.state, display).unwrap();
+        self.overlay_board = board;
+
+        match board {
+            DrawnBoard::Dashboard => self.dashboard_digits.render(&self.state, display).unwrap(),
+            DrawnBoard::Connecting => self.connecting_title.render(display).unwrap(),
+            DrawnBoard::Other => {}
         }
     }
 }

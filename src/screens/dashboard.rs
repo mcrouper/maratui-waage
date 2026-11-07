@@ -1,8 +1,7 @@
 use std::time::Duration;
 
 use mousefood::embedded_graphics::pixelcolor::Rgb565;
-use mousefood::embedded_graphics::prelude::{DrawTarget, OriginDimensions, Point, RgbColor, Size};
-use mousefood::embedded_graphics::primitives::Rectangle;
+use mousefood::embedded_graphics::prelude::{DrawTarget, OriginDimensions, RgbColor};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -12,7 +11,7 @@ use ratatui::widgets::{Block, BorderType, Paragraph, Widget};
 #[cfg(feature = "scale-test")]
 use tui_widgets::big_text::{BigText, PixelSize};
 
-use crate::screens::screen::Board;
+use crate::screens::screen::{Board, cells_to_pixels, display_cell_area};
 use crate::smooth_digits::{LARGE_DIGITS, SMALL_DIGITS, SmoothField, rgb565_from_tui};
 use crate::state::GlobalAppState;
 use crate::telemetry::{MachineMode, TelemetryFrame};
@@ -57,10 +56,6 @@ impl Board for Dashboard {
     }
 }
 
-/// Pixel size of one Ratatui cell — the backend's `MONO_7X14` font (see `setup.rs`).
-const CELL_WIDTH_PX: u32 = 7;
-const CELL_HEIGHT_PX: u32 = 14;
-
 // HX temperature colors: heating up / at brew temperature / too hot / machine offline. Same
 // thresholds as the HX gauge's fill colors (`render_hx_vgauge`).
 const HX_COLOR_HEATING: Rgb565 = Rgb565::RED;
@@ -78,9 +73,9 @@ pub struct DashboardDigits {
 }
 
 // `LARGE_DIGITS` boxes keep ~11 px below the digits free for the comma's descender, so
-// centered digits sit high. Nudge them down: the Timer (no comma) into the middle between its
-// border and the assessment label, the Weight only as far as its comma still fits.
-const TIMER_DIGITS_NUDGE_PX: i32 = 5;
+// centered digits sit high. Nudge them down: the Timer (no comma) low in its block, ~2 px above
+// the bottom border with the assessment label, the Weight only as far as its comma still fits.
+const TIMER_DIGITS_NUDGE_PX: i32 = 16;
 const WEIGHT_DIGITS_NUDGE_PX: i32 = 2;
 
 impl Default for DashboardDigits {
@@ -113,13 +108,7 @@ impl DashboardDigits {
             return Ok(());
         };
 
-        let size = display.size();
-        let areas = value_areas(Rect::new(
-            0,
-            0,
-            (size.width / CELL_WIDTH_PX) as u16,
-            (size.height / CELL_HEIGHT_PX) as u16,
-        ));
+        let areas = value_areas(display_cell_area(display));
 
         let secs = current_extraction_secs(state).to_string();
         self.timer
@@ -143,15 +132,10 @@ fn value_areas(area: Rect) -> ValueAreas {
     let [_, content_area, _] = dashboard_rows(area);
     let [info_col, timer_col, _] = content_columns(content_area);
     let [timer_area, weight_area] = timer_column_halves(timer_col);
-    let timer_inner = Block::bordered().inner(timer_area);
     let [hx_label_area, _, _] = info_rows(Block::bordered().inner(info_col));
 
     ValueAreas {
-        // The bottom row stays free for the post-shot assessment label.
-        timer: Rect {
-            height: timer_inner.height.saturating_sub(1),
-            ..timer_inner
-        },
+        timer: Block::bordered().inner(timer_area),
         weight: Block::bordered().inner(weight_area),
         // The line below the "HX" label.
         hx: Rect {
@@ -160,19 +144,6 @@ fn value_areas(area: Rect) -> ValueAreas {
             ..hx_label_area
         },
     }
-}
-
-fn cells_to_pixels(area: Rect) -> Rectangle {
-    Rectangle::new(
-        Point::new(
-            (u32::from(area.x) * CELL_WIDTH_PX) as i32,
-            (u32::from(area.y) * CELL_HEIGHT_PX) as i32,
-        ),
-        Size::new(
-            u32::from(area.width) * CELL_WIDTH_PX,
-            u32::from(area.height) * CELL_HEIGHT_PX,
-        ),
-    )
 }
 
 fn style_color(style: Style) -> Rgb565 {
@@ -513,8 +484,8 @@ fn timer_style(state: &GlobalAppState) -> Style {
     }
 }
 
-/// The digits themselves are drawn by `DashboardDigits`; this renders only the frame and the
-/// post-shot assessment label.
+/// The digits themselves are drawn by `DashboardDigits`; this renders only the frame, with the
+/// post-shot assessment label set into its bottom border so the digits get the whole inside.
 fn render_timer_half(
     area: Rect,
     frame: &mut Frame,
@@ -522,32 +493,20 @@ fn render_timer_half(
     timer_style: Style,
     state: &GlobalAppState,
 ) {
-    let buf = frame.buffer_mut();
-
-    let timer_block = Block::bordered()
+    let mut timer_block = Block::bordered()
         .title("Timer")
         .title_alignment(ratatui::layout::HorizontalAlignment::Center)
         .border_type(BorderType::Rounded)
         .border_style(STYLE_YELLOW);
 
-    let timer_inner = timer_block.inner(area);
-    timer_block.render(area, buf);
-
-    // Post-shot assessment label pinned to the bottom of the block
     if !state.extraction_state.is_extracting()
         && state.extraction_state.last_extraction_duration().is_some()
     {
-        let label_area = Rect {
-            x: timer_inner.x,
-            y: area.y + area.height.saturating_sub(2),
-            width: timer_inner.width,
-            height: 1,
-        };
-        Paragraph::new(Line::from(shot_quality_label(extraction_secs)))
-            .centered()
-            .style(timer_style)
-            .render(label_area, buf);
+        timer_block = timer_block
+            .title_bottom(Line::styled(shot_quality_label(extraction_secs), timer_style));
     }
+
+    timer_block.render(area, frame.buffer_mut());
 }
 
 /// Only the frame — `DashboardDigits` draws the weight inside it.

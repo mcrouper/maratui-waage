@@ -1,11 +1,13 @@
+use mousefood::embedded_graphics::pixelcolor::Rgb565;
+use mousefood::embedded_graphics::prelude::{DrawTarget, OriginDimensions};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Gauge, Paragraph, Widget};
-use tui_widgets::big_text::BigText;
 
-use crate::screens::screen::Board;
+use crate::screens::screen::{Board, cells_to_pixels, display_cell_area};
+use crate::smooth_digits::{SmoothField, TITLE_LETTERS, rgb565_from_tui};
 use crate::state::GlobalAppState;
 
 #[derive(Default)]
@@ -19,37 +21,17 @@ impl Board for Connecting {
 
 impl Connecting {
     fn render_inner(state: &GlobalAppState, area: Rect, frame: &mut Frame) {
-        // Top 13 rows (≈182 px) left empty — rat barista image rendered directly via render_image()
-        let [top, bottom] =
-            Layout::vertical([Constraint::Length(13), Constraint::Fill(1)]).areas(area);
+        let [top, bottom] = top_and_bottom(area);
 
         // Version in the top-right corner (outside the image footprint which ends at ~col 27)
-        let [_, label_render_area] =
-            Layout::horizontal([Constraint::Percentage(60), Constraint::Fill(1)]).areas(top);
-
-        let [ver_area, title_area] =
-            Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(label_render_area);
+        let [ver_area, _] = version_and_title(top);
 
         Paragraph::new(concat!("v", env!("CARGO_PKG_VERSION")))
             .alignment(Alignment::Right)
             .style(Style::new().dark_gray())
             .render(ver_area, frame.buffer_mut());
 
-        let [_, centered_title_area, _] = Layout::vertical([
-            Constraint::Fill(1),
-            Constraint::Length(8),
-            Constraint::Fill(1),
-        ])
-        .areas(title_area);
-
-        let title_big_text = BigText::builder()
-            .alignment(ratatui::layout::HorizontalAlignment::Center)
-            .lines(vec!["MAXI".into(), "TUI".into()])
-            .style(Style::new().yellow())
-            .pixel_size(tui_widgets::big_text::PixelSize::Quadrant)
-            .build();
-
-        frame.render_widget(title_big_text, centered_title_area);
+        // The title area stays blank: `ConnectingTitle` draws "MAXI / TUI" there.
 
         // Resolve current message and progress from state
         let (message, progress) = state.loading_status.unwrap_or(("starting up...", 0));
@@ -74,5 +56,64 @@ impl Connecting {
             .label(Span::raw(""))
             .ratio(ratio)
             .render(gauge_row, frame.buffer_mut());
+    }
+}
+
+/// Top 13 rows (≈182 px) left empty — rat barista image rendered directly via render_image() —
+/// and the loading block below.
+fn top_and_bottom(area: Rect) -> [Rect; 2] {
+    Layout::vertical([Constraint::Length(13), Constraint::Fill(1)]).areas(area)
+}
+
+/// Version line and title area, right of the rat barista image.
+fn version_and_title(top: Rect) -> [Rect; 2] {
+    let [_, label_render_area] =
+        Layout::horizontal([Constraint::Percentage(60), Constraint::Fill(1)]).areas(top);
+    Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(label_render_area)
+}
+
+/// The "MAXI" / "TUI" title lines, each 4 rows tall, vertically centered in the title area.
+fn title_line_areas(area: Rect) -> [Rect; 2] {
+    let [top, _] = top_and_bottom(area);
+    let [_, title_area] = version_and_title(top);
+    let [_, centered_title_area, _] = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(8),
+        Constraint::Fill(1),
+    ])
+    .areas(title_area);
+    Layout::vertical(Constraint::from_lengths([4, 4])).areas(centered_title_area)
+}
+
+/// Anti-aliased start screen title, drawn straight onto the display over the area the
+/// Ratatui render leaves blank (see `MaraUiApp::render_overlay`).
+pub struct ConnectingTitle {
+    lines: [SmoothField; 2],
+}
+
+impl Default for ConnectingTitle {
+    fn default() -> Self {
+        Self {
+            lines: [SmoothField::new(&TITLE_LETTERS), SmoothField::new(&TITLE_LETTERS)],
+        }
+    }
+}
+
+impl ConnectingTitle {
+    /// Repaint the title on the next `render` (another screen or a full clear drew over it).
+    pub fn invalidate(&mut self) {
+        self.lines.iter_mut().for_each(SmoothField::invalidate);
+    }
+
+    pub fn render<D>(&mut self, display: &mut D) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = Rgb565> + OriginDimensions,
+    {
+        let areas = title_line_areas(display_cell_area(display));
+        let color = rgb565_from_tui(Color::Yellow);
+        for ((field, area), text) in self.lines.iter_mut().zip(areas).zip(["MAXI", "TUI"]) {
+            field.draw(display, cells_to_pixels(area), text, color)?;
+        }
+        Ok(())
     }
 }

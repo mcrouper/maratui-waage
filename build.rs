@@ -108,7 +108,8 @@ struct GlyphSetSpec {
     px: f32,
     /// Height of every glyph box in pixels; digits are vertically centered in it.
     height: usize,
-    /// Tabular characters: all share the advance width of `0`, so values never shift sideways.
+    /// Full-cell characters. The font is monospaced, so digits are tabular and values never
+    /// shift sideways.
     chars: &'static str,
     /// Characters that get a tight box instead of a full digit cell (decimal comma).
     narrow_chars: &'static str,
@@ -136,6 +137,16 @@ const GLYPH_SETS: &[GlyphSetSpec] = &[
         narrow_chars: "",
         unit_px: 12.0,
         unit_chars: "°C",
+    },
+    // Start screen title, "MAXI" over "TUI": two 126x56 px lines.
+    GlyphSetSpec {
+        name: "TITLE_LETTERS",
+        px: 50.0,
+        height: 56,
+        chars: "AIMTUX",
+        narrow_chars: "",
+        unit_px: 0.0,
+        unit_chars: "",
     },
 ];
 

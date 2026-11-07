@@ -71,6 +71,7 @@ fn run_app_simulator(mut app: impl MaraUiApp) {
         app.handle_event(AppEvent::LoadingStage { message, progress });
         app.render_image(terminal.backend_mut().display_mut());
         terminal.draw(|f| app.draw(f)).unwrap();
+        app.render_overlay(terminal.backend_mut().display_mut(), false);
         std::thread::sleep(Duration::from_millis(delay_ms));
     }
     app.handle_event(AppEvent::LoadingComplete);
