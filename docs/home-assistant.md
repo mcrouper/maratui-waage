@@ -77,7 +77,7 @@ That's it — on first MQTT connect the firmware publishes all discovery configs
 ```
 
 Net weight shown on the display (grams, one decimal): tared on boot, at every shot start and on a
-double press. Published only when the value changes, at most every 250 ms.
+short press. Published only when the value changes, at most every 250 ms.
 
 ### `<prefix>/status` — periodic device info (~30 s)
 
