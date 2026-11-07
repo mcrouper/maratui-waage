@@ -47,6 +47,8 @@ impl GlyphSet {
 /// drew so an update only touches the glyph cells that changed.
 pub struct SmoothField {
     set: &'static GlyphSet,
+    /// Pixels to move the glyphs down from vertically centered (negative: up).
+    y_offset: i32,
     drawn: Option<DrawnText>,
 }
 
@@ -59,7 +61,20 @@ struct DrawnText {
 
 impl SmoothField {
     pub const fn new(set: &'static GlyphSet) -> Self {
-        Self { set, drawn: None }
+        Self {
+            set,
+            y_offset: 0,
+            drawn: None,
+        }
+    }
+
+    /// Move the glyphs `dy` pixels down from vertically centered. Glyph box rows pushed past
+    /// the field's edge are cut off, so only nudge as far as the glyphs' blank margin allows.
+    pub fn nudged_down(self, dy: i32) -> Self {
+        Self {
+            y_offset: dy,
+            ..self
+        }
     }
 
     /// Forget what is on screen, so the next [`draw`](Self::draw) repaints the whole area —
@@ -82,7 +97,9 @@ impl SmoothField {
         let set = self.set;
         let text_width: i32 = text.chars().map(|ch| i32::from(set.width_of(ch))).sum();
         let text_x = area.top_left.x + (area.size.width as i32 - text_width).max(0) / 2;
-        let glyph_y = area.top_left.y + (area.size.height as i32 - i32::from(set.height)) / 2;
+        let glyph_y = area.top_left.y
+            + (area.size.height as i32 - i32::from(set.height)) / 2
+            + self.y_offset;
 
         let mut cells = Vec::with_capacity(text.len());
         let mut x = text_x;
@@ -105,10 +122,10 @@ impl SmoothField {
             display.fill_solid(&area, BACKGROUND)?;
         } else {
             let band = |x0: i32, x1: i32| {
-                Rectangle::new(
+                area.intersection(&Rectangle::new(
                     Point::new(x0, glyph_y),
                     Size::new((x1 - x0).max(0) as u32, u32::from(set.height)),
-                )
+                ))
             };
             display.fill_solid(&band(stale_left, text_x), BACKGROUND)?;
             display.fill_solid(&band(text_x + text_width, stale_right), BACKGROUND)?;
@@ -130,8 +147,8 @@ impl SmoothField {
 }
 
 /// Stream one glyph box (glyph plus its background) to the display in a single window write.
-/// Boxes that would spill outside `clip` (text too wide for its field) are skipped rather than
-/// drawn over neighboring UI.
+/// Rows outside `clip` are cut off; boxes that would spill sideways (text too wide for its
+/// field) are skipped rather than drawn over neighboring UI.
 fn draw_glyph<D>(
     display: &mut D,
     set: &'static GlyphSet,
@@ -145,20 +162,24 @@ where
 {
     let width = set.width_of(ch);
     let rect = Rectangle::new(top_left, Size::new(u32::from(width), u32::from(set.height)));
-    if clip.intersection(&rect) != rect {
+    let visible = clip.intersection(&rect);
+    if visible.size.width != rect.size.width || visible.size.height == 0 {
         return Ok(());
     }
 
     match set.glyph(ch) {
         Some(glyph) => {
-            let pixels = (0..usize::from(width) * usize::from(set.height)).map(|i| {
+            let first_row = (visible.top_left.y - rect.top_left.y) as usize;
+            let rows = visible.size.height as usize;
+            let start = first_row * usize::from(width);
+            let pixels = (start..start + rows * usize::from(width)).map(|i| {
                 let byte = glyph.coverage[i / 2];
                 let level = if i % 2 == 0 { byte >> 4 } else { byte & 0x0F };
                 palette[usize::from(level)]
             });
-            display.fill_contiguous(&rect, pixels)
+            display.fill_contiguous(&visible, pixels)
         }
-        None => display.fill_solid(&rect, BACKGROUND),
+        None => display.fill_solid(&visible, BACKGROUND),
     }
 }
 

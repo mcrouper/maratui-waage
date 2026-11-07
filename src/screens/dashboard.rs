@@ -77,11 +77,17 @@ pub struct DashboardDigits {
     hx: SmoothField,
 }
 
+// `LARGE_DIGITS` boxes keep ~11 px below the digits free for the comma's descender, so
+// centered digits sit high. Nudge them down: the Timer (no comma) into the middle between its
+// border and the assessment label, the Weight only as far as its comma still fits.
+const TIMER_DIGITS_NUDGE_PX: i32 = 5;
+const WEIGHT_DIGITS_NUDGE_PX: i32 = 2;
+
 impl Default for DashboardDigits {
     fn default() -> Self {
         Self {
-            timer: SmoothField::new(&LARGE_DIGITS),
-            weight: SmoothField::new(&LARGE_DIGITS),
+            timer: SmoothField::new(&LARGE_DIGITS).nudged_down(TIMER_DIGITS_NUDGE_PX),
+            weight: SmoothField::new(&LARGE_DIGITS).nudged_down(WEIGHT_DIGITS_NUDGE_PX),
             hx: SmoothField::new(&SMALL_DIGITS),
         }
     }
