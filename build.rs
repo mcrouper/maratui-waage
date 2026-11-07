@@ -138,16 +138,6 @@ const GLYPH_SETS: &[GlyphSetSpec] = &[
         unit_px: 12.0,
         unit_chars: "°C",
     },
-    // Start screen title, "MAXI" over "TUI": two 126x56 px lines.
-    GlyphSetSpec {
-        name: "TITLE_LETTERS",
-        px: 50.0,
-        height: 56,
-        chars: "AIMTUX",
-        narrow_chars: "",
-        unit_px: 0.0,
-        unit_chars: "",
-    },
 ];
 
 /// Rasterize the glyph sets in `GLYPH_SETS` to 4-bit coverage bitmaps (two pixels per byte,

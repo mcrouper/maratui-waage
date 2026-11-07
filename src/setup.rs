@@ -158,11 +158,13 @@ fn run_app_hardware(mut app: impl MaraUiApp) {
         message: "connecting wifi...",
         progress: 20,
     });
-    app.render_image(terminal.backend_mut().display_mut());
     terminal.draw(|f| app.draw(f)).unwrap();
     app.render_overlay(terminal.backend_mut().display_mut(), false);
 
-    let (mut wifi, _) = init_wifi(modem, &app_config, nvs_partition);
+    let (mut wifi, _) = while_animating(
+        || init_wifi(modem, &app_config, nvs_partition),
+        || app.render_overlay(terminal.backend_mut().display_mut(), false),
+    );
     app.handle_event(AppEvent::WifiStatusChanged(ConnectionStatus::Connected));
 
     // ── MQTT ────────────────────────────────────────────────────────────────
@@ -171,12 +173,14 @@ fn run_app_hardware(mut app: impl MaraUiApp) {
             message: "putting on hat...",
             progress: 55,
         });
-        app.render_image(terminal.backend_mut().display_mut());
         terminal.draw(|f| app.draw(f)).unwrap();
         app.render_overlay(terminal.backend_mut().display_mut(), false);
 
         let stage_start = Instant::now();
-        let (client, counter_rx, status_rx) = init_mqtt(&app_config);
+        let (client, counter_rx, status_rx) = while_animating(
+            || init_mqtt(&app_config),
+            || app.render_overlay(terminal.backend_mut().display_mut(), false),
+        );
         min_stage_delay(stage_start);
         (Some(client), Some(counter_rx), Some(status_rx))
     } else {
@@ -189,7 +193,6 @@ fn run_app_hardware(mut app: impl MaraUiApp) {
         message: "heating up the machine...",
         progress: 85,
     });
-    app.render_image(terminal.backend_mut().display_mut());
     terminal.draw(|f| app.draw(f)).unwrap();
     app.render_overlay(terminal.backend_mut().display_mut(), false);
 
@@ -496,7 +499,6 @@ fn run_app_hardware(mut app: impl MaraUiApp) {
             terminal.clear().unwrap();
         }
 
-        app.render_image(terminal.backend_mut().display_mut());
 
         terminal
             .draw(|f| {
@@ -517,6 +519,25 @@ const WIFI_RECONNECT_INTERVAL: Duration = Duration::from_secs(15);
 const MIN_STAGE_MS: u64 = 800;
 /// How long Button1 must be held to start the scale calibration wizard.
 const CALIBRATION_HOLD_DURATION: Duration = Duration::from_secs(3);
+
+/// Stack for the worker thread running a blocking boot step (Wi-Fi or MQTT bring-up).
+const BOOT_STEP_STACK_SIZE: usize = 16 * 1024;
+
+/// Run the blocking boot `step` on a worker thread and keep calling `animate` (which paces
+/// itself) until it finishes, so the start screen animation keeps playing meanwhile.
+fn while_animating<T: Send>(step: impl FnOnce() -> T + Send, mut animate: impl FnMut()) -> T {
+    std::thread::scope(|scope| {
+        let worker = std::thread::Builder::new()
+            .stack_size(BOOT_STEP_STACK_SIZE)
+            .spawn_scoped(scope, step)
+            .expect("Failed to spawn boot step thread");
+        while !worker.is_finished() {
+            animate();
+            esp_idf_svc::hal::delay::FreeRtos::delay_ms(10);
+        }
+        worker.join().expect("Boot step panicked")
+    })
+}
 
 fn min_stage_delay(started_at: Instant) {
     let elapsed = started_at.elapsed();

@@ -68,7 +68,7 @@ MARATUI_MQTT_TOPIC_PREFIX=mara
 `run_app` is re-exported from either `setup.rs` (device) or `setup_simulator.rs` (simulator). Both implement the same polling loop: read UART/keyboard input → update telemetry → handle button presses → drain outbound MQTT queue → render.
 
 ### `MaraUiApp` trait (`src/app.rs`)
-The public interface all platform setups call. `MaraUi` is the concrete implementation. `draw()` dispatches to the active screen; `render_image()` blits a raw RGB565 asset directly to the embedded display (bypassing Ratatui), used for the rat barista sprite on the Main screen.
+The public interface all platform setups call. `MaraUi` is the concrete implementation. `draw()` dispatches to the active screen; `render_overlay()` draws straight onto the display (bypassing Ratatui) right after each frame: the smooth digits and the start screen's boot animation.
 
 ### State management (`src/state/`)
 - `GlobalAppState` — single source of truth, passed by reference everywhere. Holds current screen, extraction state, machine state, connection statuses, MQTT outbound queue, and error.
@@ -93,15 +93,10 @@ Each screen is a zero-size struct implementing the `Board` trait (`fn render(sta
 - Because the two HX711s free-run on independent, unsynchronized conversion cycles, they're essentially never "ready" on the same loop tick — `setup.rs` tracks each cell's *latest known* reading and sums those, rather than summing `left.unwrap_or(0) + right.unwrap_or(0)` (which would treat whichever cell isn't ready *this exact tick* as reading zero).
 
 ### Smooth digits (`src/smooth_digits.rs`)
-The Dashboard's Timer, Weight and HX readouts and the start screen's "MAXI / TUI" title are not Ratatui text: those screens leave the areas blank and `DashboardDigits` (in `dashboard.rs`) / `ConnectingTitle` (in `connecting.rs`) draw anti-aliased glyphs straight onto the display via `MaraUiApp::render_overlay`, called right after every `terminal.draw`. `draw()` records which board it rendered (`DrawnBoard`) so the overlay always matches the frame. Glyphs are rasterized at build time by `build.rs` (`GLYPH_SETS`, using `fontdue` and `assets/fonts/JetBrainsMono-Bold.ttf`) into 4-bit coverage bitmaps. `SmoothField` redraws only glyph cells whose character or color changed, and repaints in full after a terminal clear or when the Dashboard comes back from another screen.
+The Dashboard's Timer, Weight and HX readouts are not Ratatui text: the Dashboard leaves the areas blank and `DashboardDigits` (in `dashboard.rs`) draws anti-aliased glyphs straight onto the display via `MaraUiApp::render_overlay`, called right after every `terminal.draw`. `draw()` records which board it rendered (`DrawnBoard`) so the overlay always matches the frame. Glyphs are rasterized at build time by `build.rs` (`GLYPH_SETS`, using `fontdue` and `assets/fonts/JetBrainsMono-Bold.ttf`) into 4-bit coverage bitmaps. `SmoothField` redraws only glyph cells whose character or color changed, and repaints in full after a terminal clear or when the Dashboard comes back from another screen.
 
-### Assets (`assets/`)
-Raw RGB565 image files are `include_bytes!`-embedded at compile time. To regenerate from PNG:
-```bash
-ffmpeg -f lavfi -i color=black:s=180x240 -i rat_barista.png \
-  -filter_complex "[1:v]scale=180:240[scaled];[0:v][scaled]overlay" \
-  -f rawvideo -pix_fmt rgb565be -frames:v 1 rat_barista.raw
-```
+### Boot animation (`src/screens/boot_animation.rs`)
+While the start screen (`Connecting`) is shown, `BootAnimation` loops a ten-second pixel-art scene in the top 182 px (below the version line): a Mara X overheats and explodes, a red sports car pulls up, its driver gets out and waves, and they drive off. It is painted at half resolution into a 160x84 RGB565 canvas (sprites are ASCII art with a per-sprite palette) and streamed doubled, sending only rows that changed. Frames are paced to `FRAME_INTERVAL` inside `render`, so `render_overlay` can be called every loop tick. On the device, the blocking Wi-Fi and MQTT bring-up run on a worker thread (`while_animating` in `setup.rs`) so the animation keeps playing during boot.
 
 ### Simulator keyboard controls
 | Key | Action |

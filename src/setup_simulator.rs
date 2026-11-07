@@ -67,15 +67,21 @@ fn run_app_simulator(mut app: impl MaraUiApp) {
         ("putting on hat...", 55, 600),
         ("heating up the machine...", 85, 700),
     ];
+    // Keep the boot animation playing (and the window flushed) through each simulated wait.
+    let mut animate_for = |app: &mut _, duration: Duration| {
+        let until = Instant::now() + duration;
+        while Instant::now() < until {
+            terminal.draw(|f| MaraUiApp::draw(app, f)).unwrap();
+            MaraUiApp::render_overlay(app, terminal.backend_mut().display_mut(), false);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
     for &(message, progress, delay_ms) in stages {
         app.handle_event(AppEvent::LoadingStage { message, progress });
-        app.render_image(terminal.backend_mut().display_mut());
-        terminal.draw(|f| app.draw(f)).unwrap();
-        app.render_overlay(terminal.backend_mut().display_mut(), false);
-        std::thread::sleep(Duration::from_millis(delay_ms));
+        animate_for(&mut app, Duration::from_millis(delay_ms));
     }
     app.handle_event(AppEvent::LoadingComplete);
-    std::thread::sleep(Duration::from_secs(5));
+    animate_for(&mut app, Duration::from_secs(5));
     app.handle_event(AppEvent::EnterOfflineMode);
 
     const STATUS_INTERVAL: Duration = Duration::from_secs(30);
@@ -97,7 +103,6 @@ fn run_app_simulator(mut app: impl MaraUiApp) {
             terminal.clear().unwrap();
         }
 
-        app.render_image(terminal.backend_mut().display_mut());
         terminal
             .draw(|f| {
                 app.draw(f);
