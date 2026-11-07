@@ -28,7 +28,7 @@ The primary screen. Shows all real-time machine data:
 - **Boiler gauge** — current vs. target temperature with warm→ready color zones and a target marker
 - **HX column** — heat-exchanger temperature with a vertical mini-gauge; ideal zone (90–95°C) is always visible
 - **HEAT / PUMP indicators** — live status dots
-- **Extraction timer** — large countdown in seconds, color shifts white→green→yellow as the shot progresses
+- **Extraction timer** — large anti-aliased seconds counter; after the shot an assessment (GOOD, PERFECT, …) appears in its bottom border
 - **Weight** — live shot weight in grams from the dual-HX711 scale, auto-tared the moment the pump starts
 - **Shot gauge ("%")** — tracks extracted weight against a 40g target, not elapsed time
 - **Shot quality label** — post-extraction assessment (UNDEREXTRACTED / GOOD / PERFECT / LONG SHOT / BLONDING) shown after the pump stops

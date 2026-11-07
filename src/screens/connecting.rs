@@ -10,6 +10,13 @@ use crate::screens::screen::{Board, cells_to_pixels, display_cell_area};
 use crate::smooth_digits::{SmoothField, TITLE_LETTERS, rgb565_from_tui};
 use crate::state::GlobalAppState;
 
+// Start screen palette. RGB values are rounded to the display's RGB565 when drawn.
+const COLOR_TITLE: Color = Color::Rgb(0xC8, 0x75, 0x33);
+const COLOR_VERSION: Color = Color::Rgb(0xFF, 0xB0, 0x00);
+const COLOR_STATUS: Color = Color::Rgb(0xC8, 0x75, 0x33);
+const COLOR_PROGRESS: Color = Color::Rgb(0xC8, 0x75, 0x33);
+const COLOR_PROGRESS_TRACK: Color = Color::Gray;
+
 #[derive(Default)]
 pub struct Connecting;
 
@@ -28,7 +35,7 @@ impl Connecting {
 
         Paragraph::new(concat!("v", env!("CARGO_PKG_VERSION")))
             .alignment(Alignment::Right)
-            .style(Style::new().dark_gray())
+            .style(Style::new().fg(COLOR_VERSION))
             .render(ver_area, frame.buffer_mut());
 
         // The title area stays blank: `ConnectingTitle` draws "MAXI / TUI" there.
@@ -47,12 +54,12 @@ impl Connecting {
         let [msg_row, gauge_row] =
             Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(inner);
 
-        Paragraph::new(Line::styled(message, Style::new().dark_gray()))
+        Paragraph::new(Line::styled(message, Style::new().fg(COLOR_STATUS)))
             .centered()
             .render(msg_row, frame.buffer_mut());
 
         Gauge::default()
-            .gauge_style(Style::default().fg(Color::Yellow).bg(Color::Gray))
+            .gauge_style(Style::default().fg(COLOR_PROGRESS).bg(COLOR_PROGRESS_TRACK))
             .label(Span::raw(""))
             .ratio(ratio)
             .render(gauge_row, frame.buffer_mut());
@@ -110,7 +117,7 @@ impl ConnectingTitle {
         D: DrawTarget<Color = Rgb565> + OriginDimensions,
     {
         let areas = title_line_areas(display_cell_area(display));
-        let color = rgb565_from_tui(Color::Yellow);
+        let color = rgb565_from_tui(COLOR_TITLE);
         for ((field, area), text) in self.lines.iter_mut().zip(areas).zip(["MAXI", "TUI"]) {
             field.draw(display, cells_to_pixels(area), text, color)?;
         }
