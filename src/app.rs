@@ -1,6 +1,8 @@
 use crate::button::Button;
 use crate::run_app;
-use crate::screens::{Board, CalibrationWizard, Connecting, Dashboard, Debug, Graphs, Screen};
+use crate::screens::{
+    Board, CalibrationWizard, Connecting, Dashboard, DashboardDigits, Debug, Graphs, Screen,
+};
 use crate::state::global_state::MqttOutboundMessage;
 use crate::state::{AppEvent, AppStateMachine, CalibrationStep, ConnectionStatus, GlobalAppState};
 use crate::telemetry::TelemetryFrame;
@@ -67,6 +69,14 @@ pub trait MaraUiApp {
         D: DrawTarget<Color = Rgb565> + OriginDimensions,
         D::Error: core::fmt::Debug;
 
+    /// Draw anti-aliased readouts straight onto the display — call right after
+    /// `terminal.draw`, so they land on top of the frame Ratatui just flushed. Pass
+    /// `full_redraw` when the display was cleared this frame.
+    fn render_overlay<D>(&mut self, display: &mut D, full_redraw: bool)
+    where
+        D: DrawTarget<Color = Rgb565> + OriginDimensions,
+        D::Error: core::fmt::Debug;
+
     /// Run the application
     ///
     /// Default implementation provided. Do not override unless necessary.
@@ -83,6 +93,8 @@ pub trait MaraUiApp {
 pub struct MaraUi {
     /// Global application state
     pub state: GlobalAppState,
+    /// Smooth Dashboard digits drawn by `render_overlay`
+    dashboard_digits: DashboardDigits,
 }
 
 /// The main application implementation
@@ -201,5 +213,25 @@ impl MaraUiApp for MaraUi {
         let image = ImageRawBE::new(image_data, 180);
         let im: Image<'_, ImageRaw<'_, Rgb565>> = Image::new(&image, Point::new(5, -60));
         im.draw(display).unwrap();
+    }
+
+    fn render_overlay<D>(&mut self, display: &mut D, full_redraw: bool)
+    where
+        D: DrawTarget<Color = Rgb565> + OriginDimensions,
+        D::Error: core::fmt::Debug,
+    {
+        // Mirrors `draw()`'s choice of what's on screen. While anything else is shown, Ratatui
+        // paints over the digit areas, so they must be repainted in full once the Dashboard
+        // is back.
+        let dashboard_visible = self.state.machine_online(Instant::now())
+            && self.state.calibration_step.is_none()
+            && self.state.current_screen == Screen::Dashboard;
+
+        if full_redraw || !dashboard_visible {
+            self.dashboard_digits.invalidate();
+        }
+        if dashboard_visible {
+            self.dashboard_digits.render(&self.state, display).unwrap();
+        }
     }
 }

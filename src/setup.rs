@@ -488,7 +488,8 @@ fn run_app_hardware(mut app: impl MaraUiApp) {
 
         // Apply any pending full clear requested by the state machine (new session, Debug
         // toggle) so accumulated display artifacts are wiped before the next frame.
-        if app.take_redraw_request() {
+        let full_redraw = app.take_redraw_request();
+        if full_redraw {
             terminal.clear().unwrap();
         }
 
@@ -499,6 +500,7 @@ fn run_app_hardware(mut app: impl MaraUiApp) {
                 app.draw(f);
             })
             .unwrap();
+        app.render_overlay(terminal.backend_mut().display_mut(), full_redraw);
 
         // Yield to the FreeRTOS scheduler so the UART task and Wi-Fi/MQTT stack
         // get CPU time between render frames.

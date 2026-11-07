@@ -91,7 +91,8 @@ fn run_app_simulator(mut app: impl MaraUiApp) {
         app.tick();
 
         // Apply any pending full clear requested by the state machine (new session, Debug toggle).
-        if app.take_redraw_request() {
+        let full_redraw = app.take_redraw_request();
+        if full_redraw {
             terminal.clear().unwrap();
         }
 
@@ -101,6 +102,7 @@ fn run_app_simulator(mut app: impl MaraUiApp) {
                 app.draw(f);
             })
             .unwrap();
+        app.render_overlay(terminal.backend_mut().display_mut(), full_redraw);
 
         // Simulate a dripping scale while the debug pump-on frame is "extracting".
         let now_w = Instant::now();
