@@ -26,6 +26,9 @@ pub mod telemetry;
 
 pub mod screens;
 
+/// Anti-aliased digit readouts drawn directly onto the display (bypassing Ratatui).
+pub mod smooth_digits;
+
 /// State management (FSM).
 pub mod state;
 
