@@ -92,6 +92,9 @@ Each screen is a zero-size struct implementing the `Board` trait (`fn render(sta
 - The Dashboard shows live weight (`GlobalAppState::weight_dg`, in decigrams) and auto-tares the moment a shot starts (`AppEvent::ShotStarted`) so it displays net extracted weight; it also auto-tares once on the first `WeightUpdated` after boot (`fsm.rs`'s `WeightUpdated` handler). `AppStateMachine::tare_scale` is the shared zero-out helper, also invoked by a double press (`ButtonPressType::Double`) for a manual zero at any time. The shot gauge ("%" column) tracks extracted weight, not elapsed time: `WEIGHT_GAUGE_MAX_DG` (40g) is 100%.
 - Because the two HX711s free-run on independent, unsynchronized conversion cycles, they're essentially never "ready" on the same loop tick — `setup.rs` tracks each cell's *latest known* reading and sums those, rather than summing `left.unwrap_or(0) + right.unwrap_or(0)` (which would treat whichever cell isn't ready *this exact tick* as reading zero).
 
+### Smooth digits (`src/smooth_digits.rs`)
+The Dashboard's Timer, Weight and HX readouts are not Ratatui text: the Dashboard leaves those areas blank and `DashboardDigits` (in `dashboard.rs`) draws anti-aliased digits straight onto the display via `MaraUiApp::render_overlay`, called right after `terminal.draw`. Glyphs are rasterized at build time by `build.rs` (`GLYPH_SETS`, using `fontdue` and `assets/fonts/JetBrainsMono-Bold.ttf`) into 4-bit coverage bitmaps. `SmoothField` redraws only glyph cells whose character or color changed, and repaints in full after a terminal clear or when the Dashboard comes back from another screen.
+
 ### Assets (`assets/`)
 Raw RGB565 image files are `include_bytes!`-embedded at compile time. To regenerate from PNG:
 ```bash
