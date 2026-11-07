@@ -1,3 +1,4 @@
+pub mod boot_animation;
 pub mod calibration;
 pub mod connecting;
 pub mod dashboard;
@@ -5,8 +6,9 @@ pub mod debug;
 pub mod graphs;
 pub mod screen;
 
+pub use boot_animation::BootAnimation;
 pub use calibration::CalibrationWizard;
-pub use connecting::{Connecting, ConnectingTitle};
+pub use connecting::Connecting;
 pub use dashboard::{Dashboard, DashboardDigits};
 pub use debug::Debug;
 pub use graphs::Graphs;

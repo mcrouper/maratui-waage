@@ -1,15 +1,13 @@
 use crate::button::Button;
 use crate::run_app;
 use crate::screens::{
-    Board, CalibrationWizard, Connecting, ConnectingTitle, Dashboard, DashboardDigits, Debug,
-    Graphs, Screen,
+    Board, BootAnimation, CalibrationWizard, Connecting, Dashboard, DashboardDigits, Debug, Graphs,
+    Screen,
 };
 use crate::state::global_state::MqttOutboundMessage;
 use crate::state::{AppEvent, AppStateMachine, CalibrationStep, ConnectionStatus, GlobalAppState};
 use crate::telemetry::TelemetryFrame;
-use mousefood::embedded_graphics::Drawable;
-use mousefood::embedded_graphics::image::{Image, ImageRaw, ImageRawBE};
-use mousefood::embedded_graphics::prelude::{DrawTarget, OriginDimensions, Point};
+use mousefood::embedded_graphics::prelude::{DrawTarget, OriginDimensions};
 use mousefood::prelude::Rgb565;
 use ratatui::Frame;
 use std::cell::Cell;
@@ -66,12 +64,7 @@ pub trait MaraUiApp {
     /// Time of the last received UART telemetry frame
     fn last_uart_frame_at(&self) -> Option<Instant>;
 
-    fn render_image<D>(&mut self, display: &mut D)
-    where
-        D: DrawTarget<Color = Rgb565> + OriginDimensions,
-        D::Error: core::fmt::Debug;
-
-    /// Draw anti-aliased readouts straight onto the display — call right after
+    /// Draw anti-aliased readouts and the boot animation straight onto the display — call right after
     /// `terminal.draw`, so they land on top of the frame Ratatui just flushed. Pass
     /// `full_redraw` when the display was cleared this frame.
     fn render_overlay<D>(&mut self, display: &mut D, full_redraw: bool)
@@ -101,8 +94,8 @@ pub struct MaraUi {
     overlay_board: DrawnBoard,
     /// Smooth Dashboard digits drawn by `render_overlay`
     dashboard_digits: DashboardDigits,
-    /// Smooth start screen title drawn by `render_overlay`
-    connecting_title: ConnectingTitle,
+    /// Start screen animation drawn by `render_overlay`
+    boot_animation: BootAnimation,
 }
 
 /// Boards that get smooth overlay text, as far as `render_overlay` is concerned.
@@ -217,27 +210,6 @@ impl MaraUiApp for MaraUi {
         )
     }
 
-    fn render_image<D>(&mut self, display: &mut D)
-    where
-        D: DrawTarget<Color = Rgb565> + OriginDimensions,
-        D::Error: core::fmt::Debug,
-    {
-        // Render rat barista whenever the waiting screen is shown (machine offline)
-        let is_connecting = !self.state.machine_online(Instant::now())
-            && self.state.current_screen != Screen::Debug;
-
-        if !is_connecting {
-            return;
-        }
-
-        //ffmpeg -f lavfi -i color=black:s=180x180 -i rat_barista.png -filter_complex "[1:v]scale=180:180[scaled];[0:v][scaled]overlay" -f rawvideo -pix_fmt rgb565be -frames:v 1 rat_barista.raw
-        let image_data: &[u8] = include_bytes!("../assets/rat_barista.raw");
-
-        let image = ImageRawBE::new(image_data, 180);
-        let im: Image<'_, ImageRaw<'_, Rgb565>> = Image::new(&image, Point::new(5, -60));
-        im.draw(display).unwrap();
-    }
-
     fn render_overlay<D>(&mut self, display: &mut D, full_redraw: bool)
     where
         D: DrawTarget<Color = Rgb565> + OriginDimensions,
@@ -248,13 +220,16 @@ impl MaraUiApp for MaraUi {
         let board = self.drawn_board.get();
         if full_redraw || board != self.overlay_board {
             self.dashboard_digits.invalidate();
-            self.connecting_title.invalidate();
+            self.boot_animation.invalidate();
         }
         self.overlay_board = board;
 
         match board {
             DrawnBoard::Dashboard => self.dashboard_digits.render(&self.state, display).unwrap(),
-            DrawnBoard::Connecting => self.connecting_title.render(display).unwrap(),
+            DrawnBoard::Connecting => self
+                .boot_animation
+                .render(display, Instant::now())
+                .unwrap(),
             DrawnBoard::Other => {}
         }
     }
