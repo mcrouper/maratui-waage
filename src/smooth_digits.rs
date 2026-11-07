@@ -49,6 +49,9 @@ pub struct SmoothField {
     set: &'static GlyphSet,
     /// Pixels to move the glyphs down from vertically centered (negative: up).
     y_offset: i32,
+    /// Keep a sign-wide slot left of unsigned numbers, so a minus appearing or disappearing
+    /// doesn't shift the digits.
+    sign_slot: bool,
     drawn: Option<DrawnText>,
 }
 
@@ -64,6 +67,7 @@ impl SmoothField {
         Self {
             set,
             y_offset: 0,
+            sign_slot: false,
             drawn: None,
         }
     }
@@ -73,6 +77,15 @@ impl SmoothField {
     pub fn nudged_down(self, dy: i32) -> Self {
         Self {
             y_offset: dy,
+            ..self
+        }
+    }
+
+    /// Lay out numbers as if always signed: an unsigned number gets a blank `-`-wide cell in
+    /// front, so going from `0,0` to `-0,2` only adds the minus.
+    pub fn with_sign_slot(self) -> Self {
+        Self {
+            sign_slot: true,
             ..self
         }
     }
@@ -95,6 +108,20 @@ impl SmoothField {
         D: DrawTarget<Color = Rgb565>,
     {
         let set = self.set;
+        // `set` has no space glyph: it renders as a blank cell as wide as `-` (tabular). Numbers
+        // too wide for the field with the slot (e.g. 100+ g) go without it.
+        let padded = format!(" {text}");
+        let text_fits = |t: &str| {
+            t.chars().map(|ch| u32::from(set.width_of(ch))).sum::<u32>() <= area.size.width
+        };
+        let text = if self.sign_slot
+            && text.starts_with(|c: char| c.is_ascii_digit())
+            && text_fits(&padded)
+        {
+            padded.as_str()
+        } else {
+            text
+        };
         let text_width: i32 = text.chars().map(|ch| i32::from(set.width_of(ch))).sum();
         let text_x = area.top_left.x + (area.size.width as i32 - text_width).max(0) / 2;
         let glyph_y = area.top_left.y
@@ -242,5 +269,54 @@ mod tests {
         assert_eq!(palette[0], Rgb565::BLACK);
         assert_eq!(palette[15], Rgb565::WHITE);
         assert!(palette[7].g() > 0 && palette[7].g() < Rgb565::WHITE.g());
+    }
+
+    /// Records the x coordinate of every glyph box drawn.
+    struct Recorder(Vec<i32>);
+
+    impl mousefood::embedded_graphics::prelude::OriginDimensions for Recorder {
+        fn size(&self) -> Size {
+            Size::new(320, 240)
+        }
+    }
+
+    impl DrawTarget for Recorder {
+        type Color = Rgb565;
+        type Error = core::convert::Infallible;
+
+        fn draw_iter<I>(&mut self, _: I) -> Result<(), Self::Error>
+        where
+            I: IntoIterator<Item = mousefood::embedded_graphics::Pixel<Rgb565>>,
+        {
+            Ok(())
+        }
+
+        fn fill_contiguous<I>(&mut self, area: &Rectangle, _: I) -> Result<(), Self::Error>
+        where
+            I: IntoIterator<Item = Rgb565>,
+        {
+            self.0.push(area.top_left.x);
+            Ok(())
+        }
+
+        // Background fills aren't glyph boxes.
+        fn fill_solid(&mut self, _: &Rectangle, _: Rgb565) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn sign_slot_keeps_digits_in_place_when_a_minus_appears() {
+        let area = Rectangle::new(Point::new(70, 126), Size::new(175, 56));
+        let mut field = SmoothField::new(&LARGE_DIGITS).with_sign_slot();
+        let mut display = Recorder(Vec::new());
+
+        field.draw(&mut display, area, "0,0", Rgb565::WHITE).unwrap();
+        let positive = std::mem::take(&mut display.0);
+        field.draw(&mut display, area, "-0,2", Rgb565::WHITE).unwrap();
+
+        // Only the minus and the changed last digit are redrawn; both zeros stay put.
+        let zero_width = i32::from(LARGE_DIGITS.width_of('0'));
+        assert_eq!(display.0, vec![positive[0] - zero_width, positive[2]]);
     }
 }

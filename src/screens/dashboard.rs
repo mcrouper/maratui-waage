@@ -82,7 +82,9 @@ impl Default for DashboardDigits {
     fn default() -> Self {
         Self {
             timer: SmoothField::new(&LARGE_DIGITS).nudged_down(TIMER_DIGITS_NUDGE_PX),
-            weight: SmoothField::new(&LARGE_DIGITS).nudged_down(WEIGHT_DIGITS_NUDGE_PX),
+            weight: SmoothField::new(&LARGE_DIGITS)
+                .nudged_down(WEIGHT_DIGITS_NUDGE_PX)
+                .with_sign_slot(),
             hx: SmoothField::new(&SMALL_DIGITS),
         }
     }
