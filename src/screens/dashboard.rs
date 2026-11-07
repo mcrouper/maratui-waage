@@ -1,29 +1,48 @@
 use std::time::Duration;
 
+use mousefood::embedded_graphics::pixelcolor::Rgb565;
+use mousefood::embedded_graphics::prelude::{DrawTarget, OriginDimensions};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph, Widget};
+#[cfg(feature = "scale-test")]
 use tui_widgets::big_text::{BigText, PixelSize};
 
-use crate::screens::screen::Board;
+use crate::screens::screen::{Board, cells_to_pixels, display_cell_area};
+use crate::smooth_digits::{LARGE_DIGITS, SMALL_DIGITS, SmoothField, rgb565_from_tui};
 use crate::state::GlobalAppState;
 use crate::telemetry::{MachineMode, TelemetryFrame};
 
-const STYLE_GREEN: Style = Style::new().fg(Color::Green);
-const STYLE_CYAN: Style = Style::new().fg(Color::Cyan);
-const STYLE_RED: Style = Style::new().fg(Color::Red);
-const STYLE_GRAY: Style = Style::new().fg(Color::Gray);
-const STYLE_DARK_GRAY: Style = Style::new().fg(Color::DarkGray);
-const STYLE_WHITE: Style = Style::new().fg(Color::White);
-const STYLE_YELLOW: Style = Style::new().fg(Color::Yellow);
+// Dashboard palette. RGB values are rounded to the display's RGB565 when drawn; black is the
+// display background, so `STYLE_HIDDEN` makes the empty part of a bar invisible.
+const STYLE_BORDER: Style = Style::new().fg(Color::Rgb(0x50, 0x50, 0x50));
+const STYLE_TITLE: Style = Style::new().fg(Color::Rgb(0xFF, 0xF4, 0xE0));
+const STYLE_HEADER: Style = Style::new().fg(Color::Rgb(0xE8, 0xC9, 0xA0));
+const STYLE_INDICATOR: Style = Style::new().fg(Color::Rgb(0xFF, 0xB0, 0x00));
+const STYLE_HIDDEN: Style = Style::new().fg(Color::Black);
+const STYLE_TIMER: Style = Style::new().fg(Color::White);
+const STYLE_WEIGHT: Style = Style::new().fg(Color::Rgb(0xFF, 0xF4, 0xE0));
+/// Timer before the first shot, weight placeholder.
+const STYLE_INACTIVE: Style = Style::new().fg(Color::DarkGray);
+const STYLE_SHOT_GAUGE: Style = Style::new().fg(Color::Rgb(0xE8, 0xC9, 0xA0));
+const COLOR_HX_VALUE: Color = Color::Rgb(0x4D, 0xA3, 0xFF);
+const STYLE_HX_COLD: Style = Style::new().fg(Color::Rgb(0xFF, 0xB0, 0x00));
+const STYLE_HX_IDEAL: Style = Style::new().fg(Color::Rgb(0xA0, 0xA0, 0xA0));
+const STYLE_HX_WARM: Style = Style::new().fg(Color::Rgb(0x70, 0x70, 0x70));
+const STYLE_HX_HOT: Style = Style::new().fg(Color::Rgb(0x40, 0x40, 0x40));
+const STYLE_HX_IDEAL_ZONE: Style = Style::new().fg(Color::Rgb(0x3C, 0x9A, 0x50));
+const STYLE_BOILER_HEATING_LABEL: Style = Style::new().fg(Color::Rgb(0xFF, 0xF4, 0xE0));
+const STYLE_BOILER_HEATING_FILL: Style = Style::new().fg(Color::Rgb(0xFF, 0xB0, 0x00));
+const STYLE_BOILER_READY: Style = Style::new().fg(Color::Rgb(0x3C, 0x9A, 0x50));
+const STYLE_BOILER_TARGET: Style = Style::new().fg(Color::Rgb(0xFF, 0xB0, 0x00));
+const STYLE_NO_WATER: Style = Style::new().fg(Color::Rgb(0xFF, 0x5A, 0x4A));
 
 const BOILER_SCALE_MAX: u16 = 160;
 // Shot gauge ("%") tracks extracted weight, not elapsed time: 40g (400 decigrams) == 100%.
 const WEIGHT_GAUGE_MAX_DG: i32 = 400;
-const VALUE_PIXEL_SIZE: PixelSize = PixelSize::Quadrant;
 const HX_SCALE_MIN: f64 = 60.0;
 const HX_SCALE_MAX: f64 = 110.0;
 const HX_IDEAL_LOW: f64 = 90.0;
@@ -40,13 +59,7 @@ impl Board for Dashboard {
             return;
         };
 
-        // banner (1) | main (fill) | boiler (3)
-        let [banner_area, content_area, boiler_area] = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Fill(1),
-            Constraint::Length(3),
-        ])
-        .areas(area);
+        let [banner_area, content_area, boiler_area] = dashboard_rows(area);
 
         let [mode_area, counter_area] =
             Layout::horizontal(Constraint::from_fills([1, 1])).areas(banner_area);
@@ -59,6 +72,131 @@ impl Board for Dashboard {
     }
 }
 
+/// Anti-aliased Timer, Weight and HX temperature readouts. The Dashboard's Ratatui render
+/// leaves those areas blank and this draws them straight onto the display after each
+/// `terminal.draw`, so Ratatui never paints over them (see `MaraUiApp::render_overlay`).
+pub struct DashboardDigits {
+    timer: SmoothField,
+    weight: SmoothField,
+    hx: SmoothField,
+}
+
+// `LARGE_DIGITS` boxes keep ~11 px below the digits free for the comma's descender, so
+// centered digits sit high. Nudge them down: the Timer (no comma) low in its block, ~2 px above
+// the bottom border with the assessment label, the Weight only as far as its comma still fits.
+const TIMER_DIGITS_NUDGE_PX: i32 = 16;
+const WEIGHT_DIGITS_NUDGE_PX: i32 = 2;
+
+impl Default for DashboardDigits {
+    fn default() -> Self {
+        Self {
+            timer: SmoothField::new(&LARGE_DIGITS).nudged_down(TIMER_DIGITS_NUDGE_PX),
+            weight: SmoothField::new(&LARGE_DIGITS)
+                .nudged_down(WEIGHT_DIGITS_NUDGE_PX)
+                .with_sign_slot(),
+            hx: SmoothField::new(&SMALL_DIGITS),
+        }
+    }
+}
+
+impl DashboardDigits {
+    /// Repaint every readout on the next `render` (another screen or a full clear drew over it).
+    pub fn invalidate(&mut self) {
+        self.timer.invalidate();
+        self.weight.invalidate();
+        self.hx.invalidate();
+    }
+
+    pub fn render<D>(&mut self, state: &GlobalAppState, display: &mut D) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = Rgb565> + OriginDimensions,
+    {
+        // The `scale-test` Dashboard replaces these readouts with its raw ADC view.
+        if cfg!(feature = "scale-test") {
+            return Ok(());
+        }
+        let Some(t_frame) = state.machine_state.last_frame.as_ref() else {
+            return Ok(());
+        };
+
+        let areas = value_areas(display_cell_area(display));
+
+        let secs = current_extraction_secs(state).to_string();
+        self.timer
+            .draw(display, cells_to_pixels(areas.timer), &secs, style_color(timer_style(state)))?;
+        let (weight, weight_style) = weight_text(state);
+        self.weight
+            .draw(display, cells_to_pixels(areas.weight), &weight, style_color(weight_style))?;
+        let hx = format!("{}°C", t_frame.hx_now_c);
+        self.hx
+            .draw(display, cells_to_pixels(areas.hx), &hx, rgb565_from_tui(COLOR_HX_VALUE))
+    }
+}
+
+/// Cell areas of the readouts `DashboardDigits` draws instead of Ratatui.
+struct ValueAreas {
+    timer: Rect,
+    weight: Rect,
+    hx: Rect,
+}
+
+fn value_areas(area: Rect) -> ValueAreas {
+    let [_, content_area, _] = dashboard_rows(area);
+    let [info_col, timer_col, _] = content_columns(content_area);
+    let [timer_area, weight_area] = timer_column_halves(timer_col);
+    let [hx_label_area, _, _] = info_rows(Block::bordered().inner(info_col));
+
+    ValueAreas {
+        timer: Block::bordered().inner(timer_area),
+        weight: Block::bordered().inner(weight_area),
+        // The line below the "HX" label.
+        hx: Rect {
+            y: hx_label_area.y + 1,
+            height: 1,
+            ..hx_label_area
+        },
+    }
+}
+
+fn style_color(style: Style) -> Rgb565 {
+    rgb565_from_tui(style.fg.unwrap_or(Color::Reset))
+}
+
+/// banner (1) | main (fill) | boiler (3)
+fn dashboard_rows(area: Rect) -> [Rect; 3] {
+    Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Fill(1),
+        Constraint::Length(3),
+    ])
+    .areas(area)
+}
+
+/// info column | timer | shot gauge, rule of thirds (1:3:1).
+fn content_columns(content_area: Rect) -> [Rect; 3] {
+    Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Fill(3),
+        Constraint::Fill(1),
+    ])
+    .areas(content_area)
+}
+
+/// Timer on top, weight below.
+fn timer_column_halves(timer_col: Rect) -> [Rect; 2] {
+    Layout::vertical(Constraint::from_fills([1, 1])).areas(timer_col)
+}
+
+/// HX label + value | HX gauge | heat/pump status, inside the info column's border.
+fn info_rows(inner: Rect) -> [Rect; 3] {
+    Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Fill(1),
+        Constraint::Length(4),
+    ])
+    .areas(inner)
+}
+
 /// Normal build: info column | timer | shot gauge, rule of thirds (1:3:1).
 #[cfg(not(feature = "scale-test"))]
 fn render_main_content(
@@ -68,12 +206,7 @@ fn render_main_content(
     frame: &mut Frame,
 ) {
     let buf = frame.buffer_mut();
-    let [info_col, timer_col, gauge_col] = Layout::horizontal([
-        Constraint::Fill(1),
-        Constraint::Fill(3),
-        Constraint::Fill(1),
-    ])
-    .areas(content_area);
+    let [info_col, timer_col, gauge_col] = content_columns(content_area);
 
     render_info_col(t_frame, info_col, buf);
     render_shot_gauge(state, gauge_col, buf);
@@ -94,12 +227,12 @@ fn render_main_content(
 
 fn render_mode_banner(t_frame: &TelemetryFrame, area: Rect, buf: &mut Buffer) {
     let (label, style) = match t_frame.mode {
-        MachineMode::Coffee => ("═══ COFFEE MODE ═══", STYLE_GREEN),
+        MachineMode::Coffee => ("═══ COFFEE MODE ═══", STYLE_HEADER),
         MachineMode::SteamS | MachineMode::SteamV | MachineMode::SteamC => {
-            ("═══ STEAM MODE ═══", STYLE_CYAN)
+            ("═══ STEAM MODE ═══", STYLE_HEADER)
         }
-        MachineMode::Offline => ("═══  OFFLINE  ═══", STYLE_RED),
-        MachineMode::Unknown(_) => ("═══  UNKNOWN  ═══", STYLE_GRAY),
+        MachineMode::Offline => ("═══  OFFLINE  ═══", STYLE_HEADER),
+        MachineMode::Unknown(_) => ("═══  UNKNOWN  ═══", STYLE_HEADER),
     };
 
     Paragraph::new(Line::from(label))
@@ -115,30 +248,23 @@ fn render_cup_counter(count: Option<u64>, area: Rect, buf: &mut Buffer) {
 
     Paragraph::new(Line::from(format!("Cups brewed: {cups}")))
         .centered()
-        .style(STYLE_WHITE)
+        .style(STYLE_HEADER)
         .render(area, buf);
 }
 
 fn render_info_col(t_frame: &TelemetryFrame, area: Rect, buf: &mut Buffer) {
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(STYLE_YELLOW);
+        .border_style(STYLE_BORDER);
     let inner = block.inner(area);
     block.render(area, buf);
 
-    let [hx_label_area, hx_gauge_area, status_area] = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Fill(1),
-        Constraint::Length(4),
-    ])
-    .areas(inner);
+    let [hx_label_area, hx_gauge_area, status_area] = info_rows(inner);
 
-    Paragraph::new(vec![
-        Line::styled("HX", STYLE_DARK_GRAY),
-        Line::styled(format!("{}°", t_frame.hx_now_c), STYLE_CYAN),
-    ])
-    .centered()
-    .render(hx_label_area, buf);
+    // The value line below stays blank: `DashboardDigits` draws the HX temperature there.
+    Paragraph::new(Line::styled("HX", STYLE_INDICATOR))
+        .centered()
+        .render(hx_label_area, buf);
 
     let [_, hx_gauge_area, _] = Layout::horizontal([
         Constraint::Length(1),
@@ -155,11 +281,7 @@ fn render_info_col(t_frame: &TelemetryFrame, area: Rect, buf: &mut Buffer) {
         } else {
             "○ HEAT"
         },
-        if t_frame.heating_on {
-            STYLE_GREEN
-        } else {
-            STYLE_DARK_GRAY
-        },
+        STYLE_INDICATOR,
     );
     let pump_span = Span::styled(
         if t_frame.pump_on {
@@ -167,11 +289,7 @@ fn render_info_col(t_frame: &TelemetryFrame, area: Rect, buf: &mut Buffer) {
         } else {
             "○ PUMP"
         },
-        if t_frame.pump_on {
-            STYLE_GREEN
-        } else {
-            STYLE_DARK_GRAY
-        },
+        STYLE_INDICATOR,
     );
 
     Paragraph::new(vec![
@@ -206,10 +324,10 @@ fn render_hx_vgauge(temp: u16, area: Rect, buf: &mut Buffer) {
     let ideal_bot_row = temp_to_row(HX_IDEAL_LOW);
 
     let fill_style = match temp {
-        0..=87 => STYLE_WHITE,
-        88..=95 => STYLE_GREEN,
-        96..=100 => STYLE_YELLOW,
-        _ => STYLE_RED,
+        0..=87 => STYLE_HX_COLD,
+        88..=95 => STYLE_HX_IDEAL,
+        96..=100 => STYLE_HX_WARM,
+        _ => STYLE_HX_HOT,
     };
 
     let w = area.width as usize;
@@ -225,9 +343,9 @@ fn render_hx_vgauge(temp: u16, area: Rect, buf: &mut Buffer) {
         let (s, style) = if is_filled {
             (fill.as_str(), fill_style)
         } else if in_ideal {
-            (ideal.as_str(), STYLE_GREEN)
+            (ideal.as_str(), STYLE_HX_IDEAL_ZONE)
         } else {
-            (empty.as_str(), STYLE_DARK_GRAY)
+            (empty.as_str(), STYLE_HIDDEN)
         };
 
         buf.set_string(area.x, y, s, style);
@@ -241,8 +359,9 @@ fn render_hx_vgauge(temp: u16, area: Rect, buf: &mut Buffer) {
 fn render_boiler_gauge(t_frame: &TelemetryFrame, area: Rect, buf: &mut Buffer) {
     let block = Block::bordered()
         .title("Boiler")
+        .title_style(STYLE_TITLE)
         .border_type(BorderType::Rounded)
-        .border_style(STYLE_YELLOW);
+        .border_style(STYLE_BORDER);
     let inner = block.inner(area);
     block.render(area, buf);
 
@@ -253,7 +372,7 @@ fn render_boiler_gauge(t_frame: &TelemetryFrame, area: Rect, buf: &mut Buffer) {
     let Some(target) = t_frame.boiler_target_c else {
         Paragraph::new(Line::from("NO WATER"))
             .centered()
-            .style(STYLE_RED)
+            .style(STYLE_NO_WATER)
             .render(inner, buf);
         return;
     };
@@ -264,7 +383,11 @@ fn render_boiler_gauge(t_frame: &TelemetryFrame, area: Rect, buf: &mut Buffer) {
     // Left label: "120°/138° "
     let label = format!("{:3}°/{:3}° ", now, target);
     let label_len = label.len() as u16; // all ASCII + °(1 display width each)
-    let label_style = if at_temp { STYLE_GREEN } else { STYLE_YELLOW };
+    let label_style = if at_temp {
+        STYLE_BOILER_READY
+    } else {
+        STYLE_BOILER_HEATING_LABEL
+    };
     buf.set_string(inner.x, inner.y, &label, label_style);
 
     let bar_x = inner.x + label_len;
@@ -287,30 +410,30 @@ fn render_boiler_gauge(t_frame: &TelemetryFrame, area: Rect, buf: &mut Buffer) {
         let (ch, style) = if i < current_pos {
             // Filled portion — two-tone: warming → ready
             if i >= ready_pos {
-                ("█", STYLE_GREEN)
+                ("█", STYLE_BOILER_READY)
             } else {
-                ("█", STYLE_YELLOW)
+                ("█", STYLE_BOILER_HEATING_FILL)
             }
         } else if i == target_pos {
             // Target marker (current hasn't reached it yet)
-            ("│", STYLE_WHITE)
+            ("│", STYLE_BOILER_TARGET)
         } else {
-            ("─", STYLE_DARK_GRAY)
+            ("─", STYLE_HIDDEN)
         };
         buf.set_string(x, inner.y, ch, style);
     }
 }
 
 fn render_shot_gauge(state: &GlobalAppState, area: Rect, buf: &mut Buffer) {
-    let extraction_secs = current_extraction_secs(state);
     let has_data = state.extraction_state.is_extracting()
         || state.extraction_state.last_extraction_duration().is_some();
 
     let block = Block::bordered()
         .title_bottom("%")
         .title_alignment(ratatui::layout::HorizontalAlignment::Center)
+        .title_style(STYLE_TITLE)
         .border_type(BorderType::Rounded)
-        .border_style(STYLE_YELLOW);
+        .border_style(STYLE_BORDER);
     let inner = block.inner(area);
     block.render(area, buf);
 
@@ -322,7 +445,6 @@ fn render_shot_gauge(state: &GlobalAppState, area: Rect, buf: &mut Buffer) {
     let weight_dg = state.weight_dg.unwrap_or(0).max(0);
     let ratio = (weight_dg as f64 / WEIGHT_GAUGE_MAX_DG as f64).min(1.0);
     let filled = (ratio * total as f64).round() as usize;
-    let fill_style = shot_style(extraction_secs, state.extraction_state.is_extracting());
     let fill: String = "█".repeat(inner.width as usize);
     let empty: String = "░".repeat(inner.width as usize);
 
@@ -330,32 +452,36 @@ fn render_shot_gauge(state: &GlobalAppState, area: Rect, buf: &mut Buffer) {
         let y = inner.y + row as u16;
         let is_filled = row >= total.saturating_sub(filled);
         if is_filled {
-            buf.set_string(inner.x, y, &fill, fill_style);
+            buf.set_string(inner.x, y, &fill, STYLE_SHOT_GAUGE);
         } else {
-            buf.set_string(inner.x, y, &empty, STYLE_DARK_GRAY);
+            buf.set_string(inner.x, y, &empty, STYLE_HIDDEN);
         }
     }
 }
 
 fn render_timer(state: &GlobalAppState, area: Rect, frame: &mut Frame) {
     let extraction_secs = current_extraction_secs(state);
-
-    let timer_style = if state.extraction_state.is_extracting() {
-        shot_style(extraction_secs, true)
-    } else if state.extraction_state.last_extraction_duration().is_some() {
-        shot_style(extraction_secs, false)
-    } else {
-        STYLE_DARK_GRAY
-    };
+    let timer_style = timer_style(state);
 
     // Split the column in half: timer on top, weight below, each labeled on top.
-    let [timer_area, weight_area] =
-        Layout::vertical(Constraint::from_fills([1, 1])).areas(area);
+    let [timer_area, weight_area] = timer_column_halves(area);
 
     render_timer_half(timer_area, frame, extraction_secs, timer_style, state);
-    render_weight_half(weight_area, frame, state);
+    render_weight_half(weight_area, frame);
 }
 
+fn timer_style(state: &GlobalAppState) -> Style {
+    if state.extraction_state.is_extracting()
+        || state.extraction_state.last_extraction_duration().is_some()
+    {
+        STYLE_TIMER
+    } else {
+        STYLE_INACTIVE
+    }
+}
+
+/// The digits themselves are drawn by `DashboardDigits`; this renders only the frame, with the
+/// post-shot assessment label set into its bottom border so the digits get the whole inside.
 fn render_timer_half(
     area: Rect,
     frame: &mut Frame,
@@ -363,84 +489,40 @@ fn render_timer_half(
     timer_style: Style,
     state: &GlobalAppState,
 ) {
-    let buf = frame.buffer_mut();
-
-    // No top padding: the vertical Timer/Weight stack leaves only ~6 rows per half, and a
-    // `Quadrant` glyph needs all 4 of the ~4 left after the border — padding ate the row the
-    // glyph needed, clipping its bottom row.
-    let timer_block = Block::bordered()
+    let mut timer_block = Block::bordered()
         .title("Timer")
         .title_alignment(ratatui::layout::HorizontalAlignment::Center)
+        .title_style(STYLE_TITLE)
         .border_type(BorderType::Rounded)
-        .border_style(STYLE_YELLOW);
+        .border_style(STYLE_BORDER);
 
-    let timer_inner = timer_block.inner(area);
-    timer_block.render(area, buf);
-    let mut display_area = centered_fixed_height(timer_inner, BIG_TEXT_GLYPH_ROWS);
-    // Nudge the timer digits down 1px, only if there's a spare row below to move into.
-    let shift = 1u16.min(timer_inner.bottom().saturating_sub(display_area.bottom()));
-    display_area.y += shift;
-
-    let big_text = BigText::builder()
-        .pixel_size(VALUE_PIXEL_SIZE)
-        .centered()
-        .lines(vec![extraction_secs.to_string().into()])
-        .style(timer_style)
-        .build();
-
-    frame.render_widget(big_text, display_area);
-
-    // Post-shot assessment label pinned to the bottom of the block
     if !state.extraction_state.is_extracting()
         && state.extraction_state.last_extraction_duration().is_some()
     {
-        let buf = frame.buffer_mut();
-        let label_area = Rect {
-            x: timer_inner.x,
-            y: area.y + area.height.saturating_sub(2),
-            width: timer_inner.width,
-            height: 1,
-        };
-        Paragraph::new(Line::from(shot_quality_label(extraction_secs)))
-            .centered()
-            .style(timer_style)
-            .render(label_area, buf);
+        timer_block = timer_block
+            .title_bottom(Line::styled(shot_quality_label(extraction_secs), timer_style));
     }
+
+    timer_block.render(area, frame.buffer_mut());
 }
 
-fn render_weight_half(area: Rect, frame: &mut Frame, state: &GlobalAppState) {
-    let buf = frame.buffer_mut();
-
-    let weight_block = Block::bordered()
+/// Only the frame — `DashboardDigits` draws the weight inside it.
+fn render_weight_half(area: Rect, frame: &mut Frame) {
+    Block::bordered()
         .title("Weight")
         .title_alignment(ratatui::layout::HorizontalAlignment::Center)
+        .title_style(STYLE_TITLE)
         .border_type(BorderType::Rounded)
-        .border_style(STYLE_YELLOW);
+        .border_style(STYLE_BORDER)
+        .render(area, frame.buffer_mut());
+}
 
-    let weight_inner = weight_block.inner(area);
-    weight_block.render(area, buf);
-    let mut display_area = centered_fixed_height(weight_inner, BIG_TEXT_GLYPH_ROWS);
-    // Nudge the weight digits up 2px from their centered position — grow the height by the same
-    // amount so the *bottom* edge doesn't move too, which would clip the glyphs' bottom rows
-    // (where the decimal comma's descender lives).
-    let shift = 2u16.min(display_area.y.saturating_sub(weight_inner.y));
-    display_area.y -= shift;
-    display_area.height += shift;
-
-    let (text, style) = match state.weight_dg {
+fn weight_text(state: &GlobalAppState) -> (String, Style) {
+    match state.weight_dg {
         // German decimal comma, not a period.
-        Some(dg) => (format!("{:.1}", dg as f64 / 10.0).replace('.', ","), STYLE_WHITE),
-        None => ("--".to_string(), STYLE_DARK_GRAY),
-    };
-
-    let big_text = BigText::builder()
-        .pixel_size(VALUE_PIXEL_SIZE)
-        .centered()
-        .lines(vec![text.into()])
-        .style(style)
-        .build();
-
-    frame.render_widget(big_text, display_area);
+        Some(dg) => (format!("{:.1}", dg as f64 / 10.0).replace('.', ","), STYLE_WEIGHT),
+        None => ("--".to_string(), STYLE_INACTIVE),
+    }
 }
 
 /// `scale-test` build only: raw (uncalibrated, untared, EMA-smoothed) HX711 counts for right
@@ -464,7 +546,7 @@ fn render_raw_weight(state: &GlobalAppState, area: Rect, frame: &mut Frame) {
 
     Paragraph::new(Line::from("WEIGHT (raw, uncalibrated)"))
         .centered()
-        .style(STYLE_DARK_GRAY)
+        .style(STYLE_INACTIVE)
         .render(title_area, buf);
 
     let fmt = |v: Option<i32>| v.map(|v| v.to_string()).unwrap_or_else(|| "--".to_string());
@@ -477,30 +559,13 @@ fn render_raw_weight(state: &GlobalAppState, area: Rect, frame: &mut Frame) {
         .pixel_size(RAW_WEIGHT_PIXEL_SIZE)
         .centered()
         .lines(vec![
-            Line::styled(format!("R {}", fmt(state.raw_weight_right)), STYLE_CYAN),
-            Line::styled(format!("L {}", fmt(state.raw_weight_left)), STYLE_WHITE),
-            Line::styled(format!("S {}", fmt(sum)), STYLE_YELLOW),
+            Line::styled(format!("R {}", fmt(state.raw_weight_right)), STYLE_TITLE),
+            Line::styled(format!("L {}", fmt(state.raw_weight_left)), STYLE_WEIGHT),
+            Line::styled(format!("S {}", fmt(sum)), STYLE_INDICATOR),
         ])
         .build();
 
     frame.render_widget(big_text, digits_area);
-}
-
-// Height (in terminal rows) of a single-line `BigText` glyph at `VALUE_PIXEL_SIZE`: the 8x8
-// font compressed by `Quadrant`'s (2,2) packing is 8/2 = 4 rows tall.
-const BIG_TEXT_GLYPH_ROWS: u16 = 4;
-
-/// Vertically centers exactly `content_height` rows within `area` — clamped to `area`'s own
-/// height so it never asks for more space than is actually there (which would clip the glyph
-/// instead of just using less blank margin around it).
-fn centered_fixed_height(area: Rect, content_height: u16) -> Rect {
-    let height = content_height.min(area.height).max(1);
-    Rect {
-        x: area.x,
-        y: area.y + (area.height.saturating_sub(height) / 2),
-        width: area.width,
-        height,
-    }
 }
 
 fn current_extraction_secs(state: &GlobalAppState) -> u64 {
@@ -516,23 +581,6 @@ fn current_extraction_secs(state: &GlobalAppState) -> u64 {
             .last_extraction_duration()
             .unwrap_or(Duration::ZERO)
             .as_secs()
-    }
-}
-
-fn shot_style(secs: u64, is_live: bool) -> Style {
-    if is_live {
-        match secs {
-            0..=19 => STYLE_WHITE,
-            20..=27 => STYLE_GREEN,
-            _ => STYLE_YELLOW,
-        }
-    } else {
-        match secs {
-            0..=14 => STYLE_RED,
-            15..=19 => STYLE_YELLOW,
-            20..=30 => STYLE_GREEN,
-            _ => STYLE_YELLOW,
-        }
     }
 }
 

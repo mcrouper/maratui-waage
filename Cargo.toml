@@ -31,6 +31,8 @@ tui-widgets = {version = "0.7.0", default-features=false, features=["big-text"]}
 
 [build-dependencies]
 embuild = { version = "0.33", features = ["espidf"], optional = true }
+# Rasterizes the anti-aliased digit glyphs (src/smooth_digits.rs) from assets/fonts at build time.
+fontdue = "0.9"
 
 [lints.rust]
 unused = "warn"

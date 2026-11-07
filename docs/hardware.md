@@ -59,11 +59,11 @@ Details for each subsystem below.
 | Button 1 | GPIO12     | Internal pull-up enabled |
 
 Button connects GPIO to **GND** through a tactile switch (active LOW, NegEdge detection).
-Short press (< 500 ms): toggle Dashboard ↔ Graphs. Two short presses released within 400 ms
-of each other count as a double press instead: zero the scale (see below). Because a lone
-short press can't be told apart from the first half of a double press until that 400 ms
-window has passed without a second press, every short-press action (screen toggle, backlight
-wake) fires up to ~400 ms after release, not instantly. Long press (≥ 500 ms, < 3 s): toggle
+Short press (< 500 ms): zero the scale (see below). Two short presses released within 400 ms
+of each other count as a double press instead: toggle Dashboard ↔ Graphs (during loading:
+toggle the backlight; it also wakes a timed-out backlight). Because a lone short press can't be
+told apart from the first half of a double press until that 400 ms window has passed without a
+second press, zeroing fires up to ~400 ms after release, not instantly. Long press (≥ 500 ms, < 3 s): toggle
 Debug screen. Hold ≥ 3 s: start the scale calibration wizard (see below).
 
 ### Scale (dual HX711 load-cell amplifiers)
@@ -108,7 +108,7 @@ cell**, each with its own zero + reference step. To (re-)calibrate:
 A long press at any step during the wizard cancels without changing the stored
 calibration. The Dashboard shows live weight (left + right combined) once calibrated; it
 auto-tares both cells the moment a shot starts, so it displays the net extracted weight. It
-also auto-tares once on the very first reading after boot, and a fast double press zeroes it
+also auto-tares once on the very first reading after boot, and a short press zeroes it
 manually at any time (ignored while the calibration wizard itself is active).
 
 Before the wizard has ever been run (nothing saved to NVS yet), the scale is uncalibrated

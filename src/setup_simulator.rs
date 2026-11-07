@@ -71,6 +71,7 @@ fn run_app_simulator(mut app: impl MaraUiApp) {
         app.handle_event(AppEvent::LoadingStage { message, progress });
         app.render_image(terminal.backend_mut().display_mut());
         terminal.draw(|f| app.draw(f)).unwrap();
+        app.render_overlay(terminal.backend_mut().display_mut(), false);
         std::thread::sleep(Duration::from_millis(delay_ms));
     }
     app.handle_event(AppEvent::LoadingComplete);
@@ -91,7 +92,8 @@ fn run_app_simulator(mut app: impl MaraUiApp) {
         app.tick();
 
         // Apply any pending full clear requested by the state machine (new session, Debug toggle).
-        if app.take_redraw_request() {
+        let full_redraw = app.take_redraw_request();
+        if full_redraw {
             terminal.clear().unwrap();
         }
 
@@ -101,6 +103,7 @@ fn run_app_simulator(mut app: impl MaraUiApp) {
                 app.draw(f);
             })
             .unwrap();
+        app.render_overlay(terminal.backend_mut().display_mut(), full_redraw);
 
         // Simulate a dripping scale while the debug pump-on frame is "extracting".
         let now_w = Instant::now();
@@ -135,7 +138,9 @@ fn run_app_simulator(mut app: impl MaraUiApp) {
                     }
                     match keycode {
                         Keycode::Right | Keycode::Left => {
-                            app.handle_press(Button::Button1(ButtonPressType::Short));
+                            // Fast double-press on real hardware; the simulator has no button
+                            // timing to replicate, so inject the Double press type directly.
+                            app.handle_press(Button::Button1(ButtonPressType::Double));
                         }
                         Keycode::Up => {
                             sim_pump_on = true;
@@ -162,9 +167,7 @@ fn run_app_simulator(mut app: impl MaraUiApp) {
                             app.handle_press(Button::Button1(ButtonPressType::Long));
                         }
                         Keycode::Z => {
-                            // Fast double-press on real hardware; the simulator has no button
-                            // timing to replicate, so inject the Double press type directly.
-                            app.handle_press(Button::Button1(ButtonPressType::Double));
+                            app.handle_press(Button::Button1(ButtonPressType::Short));
                         }
                         _ => {}
                     }

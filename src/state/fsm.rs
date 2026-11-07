@@ -263,16 +263,16 @@ impl AppStateMachine {
             return;
         }
 
-        // Double press manually zeros the scale, regardless of screen — a quick way to tare
+        // Short press manually zeros the scale, regardless of screen — a quick way to tare
         // without waiting for a shot to start.
-        if let Button::Button1(ButtonPressType::Double) = button {
+        if let Button::Button1(ButtonPressType::Short) = button {
             Self::tare_scale(state);
             return;
         }
 
-        // During loading: short press manually toggles the backlight.
+        // During loading: double press manually toggles the backlight.
         if state.machine_state.last_frame.is_none() {
-            if let Button::Button1(ButtonPressType::Short) = button {
+            if let Button::Button1(ButtonPressType::Double) = button {
                 state.backlight_on = !state.backlight_on;
             }
             return;
@@ -289,7 +289,7 @@ impl AppStateMachine {
             return;
         }
 
-        if let Button::Button1(ButtonPressType::Short) = button
+        if let Button::Button1(ButtonPressType::Double) = button
             && state.current_screen != Screen::Debug
         {
             Self::handle_event(state, AppEvent::NextScreen);
@@ -298,7 +298,7 @@ impl AppStateMachine {
 
     /// Zero the scale: tare both cells against whatever they're currently reading, so the
     /// Dashboard's weight display resets to 0 g. Shared by the shot-start auto-tare and the
-    /// manual double-press-to-zero gesture.
+    /// manual short-press-to-zero gesture.
     fn tare_scale(state: &mut GlobalAppState) {
         state.scale_tare_dg = state.last_raw_weight_dg.unwrap_or(0);
         state.weight_dg = Some(0);
@@ -576,7 +576,7 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_button_press_short() {
+    fn test_handle_button_press_double_switches_screen() {
         let mut state = GlobalAppState::default();
         // Navigation is blocked until first telemetry arrives
         state.machine_state.last_frame = Some(TelemetryFrame::debug_frame());
@@ -584,7 +584,7 @@ mod tests {
         state.last_activity_at = Some(Instant::now());
         let initial_screen = state.current_screen;
 
-        AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Short));
+        AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Double));
 
         assert_eq!(state.current_screen, initial_screen.next());
     }
@@ -597,14 +597,14 @@ mod tests {
         state.last_activity_at = Some(Instant::now() - BACKLIGHT_TIMEOUT - Duration::from_secs(1));
         let initial_screen = state.current_screen;
 
-        AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Short));
+        AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Double));
 
         // First press only wakes the backlight: screen must not change, activity refreshed
         assert_eq!(state.current_screen, initial_screen);
         assert!(state.backlight_should_be_on(Instant::now()));
 
         // Second press (backlight now on) switches screens
-        AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Short));
+        AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Double));
         assert_eq!(state.current_screen, initial_screen.next());
     }
 
@@ -671,26 +671,26 @@ mod tests {
     }
 
     #[test]
-    fn test_double_press_zeroes_the_scale() {
+    fn test_short_press_zeroes_the_scale() {
         let mut state = GlobalAppState::default();
         state.machine_state.last_frame = Some(TelemetryFrame::debug_frame());
         state.last_activity_at = Some(Instant::now());
         // First reading since boot is auto-tared to zero; load the scale afterwards so there's
-        // something non-zero on screen for the double press to zero back out.
+        // something non-zero on screen for the short press to zero back out.
         AppStateMachine::handle_event(&mut state, AppEvent::WeightUpdated { weight_dg: 100 });
         AppStateMachine::handle_event(&mut state, AppEvent::WeightUpdated { weight_dg: 1334 });
         assert_eq!(state.weight_dg, Some(1234));
 
-        AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Double));
+        AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Short));
 
         assert_eq!(state.scale_tare_dg, 1334);
         assert_eq!(state.weight_dg, Some(0));
     }
 
     #[test]
-    fn test_double_press_zeroes_the_scale_even_before_telemetry_or_backlight_wake() {
+    fn test_short_press_zeroes_the_scale_even_before_telemetry_or_backlight_wake() {
         let mut state = GlobalAppState::default();
-        // No telemetry yet, and the backlight has timed out — both would block a Short press,
+        // No telemetry yet, and the backlight has timed out — both would block a screen switch,
         // but zeroing the scale is a physical action that should always work.
         assert!(state.machine_state.last_frame.is_none());
         state.last_activity_at = Some(Instant::now() - BACKLIGHT_TIMEOUT - Duration::from_secs(1));
@@ -698,7 +698,7 @@ mod tests {
         AppStateMachine::handle_event(&mut state, AppEvent::WeightUpdated { weight_dg: 600 });
         assert_eq!(state.weight_dg, Some(500));
 
-        AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Double));
+        AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Short));
 
         assert_eq!(state.scale_tare_dg, 600);
         assert_eq!(state.weight_dg, Some(0));
@@ -754,22 +754,22 @@ mod tests {
         assert!(state.machine_state.last_frame.is_none());
         let initial_screen = state.current_screen;
 
-        AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Short));
+        AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Double));
 
         // Screen must not change while no telemetry
         assert_eq!(state.current_screen, initial_screen);
     }
 
     #[test]
-    fn test_loading_short_press_toggles_backlight() {
+    fn test_loading_double_press_toggles_backlight() {
         let mut state = GlobalAppState::default();
         assert!(state.machine_state.last_frame.is_none());
         assert!(state.backlight_on);
 
-        AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Short));
+        AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Double));
         assert!(!state.backlight_on);
 
-        AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Short));
+        AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Double));
         assert!(state.backlight_on);
     }
 

@@ -28,7 +28,7 @@ The primary screen. Shows all real-time machine data:
 - **Boiler gauge** — current vs. target temperature with warm→ready color zones and a target marker
 - **HX column** — heat-exchanger temperature with a vertical mini-gauge; ideal zone (90–95°C) is always visible
 - **HEAT / PUMP indicators** — live status dots
-- **Extraction timer** — large countdown in seconds, color shifts white→green→yellow as the shot progresses
+- **Extraction timer** — large anti-aliased seconds counter; after the shot an assessment (GOOD, PERFECT, …) appears in its bottom border
 - **Weight** — live shot weight in grams from the dual-HX711 scale, auto-tared the moment the pump starts
 - **Shot gauge ("%")** — tracks extracted weight against a 40g target, not elapsed time
 - **Shot quality label** — post-extraction assessment (UNDEREXTRACTED / GOOD / PERFECT / LONG SHOT / BLONDING) shown after the pump stops
@@ -136,9 +136,9 @@ Target board: **ESP32 Type-C** with an external **ILI9341** 240×320 TFT display
 
 | Press             | Action                          |
 |-------------------|---------------------------------|
-| Short             | Toggle Dashboard ↔ Graphs       |
-| Short (on loading)| Toggle display backlight        |
-| Double (fast 2x)  | Zero the scale                  |
+| Short             | Zero the scale                  |
+| Double (fast 2x)  | Toggle Dashboard ↔ Graphs       |
+| Double (on loading)| Toggle display backlight       |
 | Long              | Enter / exit Debug overlay      |
 | Hold (3s)         | Start the scale calibration wizard |
 
@@ -149,7 +149,7 @@ See [`hardware/`](hardware/) for the KiCad project, PCB renders, Gerber files, a
 Two independent HX711 amplifiers — one per drip-tray side — feed the live Weight display and
 the weight-based shot gauge. Hold the button for 3s to run the calibration wizard (tare, then a
 known reference weight, for each cell in turn); results persist to NVS. The scale also auto-tares
-at boot and at the start of every shot; a fast double press zeroes it manually at any time. See
+at boot and at the start of every shot; a short press zeroes it manually at any time. See
 [`docs/hardware.md`](docs/hardware.md) for wiring and the full calibration walkthrough.
 
 | ![Scale installed in the machine](assets/docs/scale_installed.jpg) | ![3D-printed scale mount with both load cells](assets/docs/scale_mount_3d_print.jpg) | ![Dashboard showing a live weight reading](assets/docs/dashboard_live.jpg) |
