@@ -156,9 +156,14 @@ impl DashboardDigits {
             let timer_color = style_color(timer_style(state));
             self.timer
                 .draw(display, cells_to_pixels(areas.timer), &secs, timer_color)?;
-            let (weight, weight_style) = weight_text(state);
+            let weight_area = cells_to_pixels(areas.weight);
+            let (mut weight, weight_style) = weight_text(state, true);
+            // -100 g and below (or 1000 g and up) is too wide with the decimal: whole grams.
+            if !self.weight.fits(weight_area, &weight) {
+                weight = weight_text(state, false).0;
+            }
             self.weight
-                .draw(display, cells_to_pixels(areas.weight), &weight, style_color(weight_style))?;
+                .draw(display, weight_area, &weight, style_color(weight_style))?;
         }
         let water_color = style_color(water_style(state));
         let water = format!("{}L", liters_text(state.water.remaining_ml()));
@@ -640,10 +645,11 @@ fn render_weight_half(area: Rect, frame: &mut Frame) {
         .render(area, frame.buffer_mut());
 }
 
-fn weight_text(state: &GlobalAppState) -> (String, Style) {
+fn weight_text(state: &GlobalAppState, decimal: bool) -> (String, Style) {
     match state.weight_dg {
         // German decimal comma, not a period.
-        Some(dg) => (format!("{:.1}", dg as f64 / 10.0).replace('.', ","), STYLE_WEIGHT),
+        Some(dg) if decimal => (format!("{:.1}", dg as f64 / 10.0).replace('.', ","), STYLE_WEIGHT),
+        Some(dg) => (format!("{:.0}", dg as f64 / 10.0), STYLE_WEIGHT),
         None => ("--".to_string(), STYLE_INACTIVE),
     }
 }
@@ -721,6 +727,14 @@ fn shot_quality_label(secs: u64) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn weight_text_without_decimal_rounds_to_whole_grams() {
+        let mut state = GlobalAppState::default();
+        state.weight_dg = Some(-1376);
+        assert_eq!(weight_text(&state, true).0, "-137,6");
+        assert_eq!(weight_text(&state, false).0, "-138");
+    }
 
     #[test]
     fn liters_text_rounds_to_ten_ml() {

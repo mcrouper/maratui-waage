@@ -16,14 +16,14 @@ use mousefood::embedded_graphics::prelude::{DrawTarget, Point, RgbColor, Size};
 use mousefood::embedded_graphics::primitives::Rectangle;
 
 /// Canvas size in scene pixels; each one is drawn as a `SCALE`x`SCALE` block.
-const WIDTH: usize = 160;
-const HEIGHT: usize = 84;
+pub const WIDTH: usize = 160;
+pub const HEIGHT: usize = 84;
 const SCALE: usize = 2;
 /// Display y of the scene's top edge: just below the version line (cell row 0). The scene ends
 /// at y 182, where the loading block starts.
 const TOP_PX: i32 = 14;
-const FRAME_INTERVAL: Duration = Duration::from_millis(66);
-const LOOP_SECS: f32 = 11.5;
+pub const FRAME_INTERVAL: Duration = Duration::from_millis(66);
+pub const LOOP_SECS: f32 = 11.5;
 
 // ── Timeline (seconds into the loop) ─────────────────────────────────────────────────────────
 const FADE_IN: f32 = 0.4;
@@ -131,6 +131,14 @@ impl BootAnimation {
         }
         Ok(())
     }
+}
+
+/// The scene `t` seconds into the loop as `WIDTH`x`HEIGHT` pixels, row by row — for previewing
+/// the animation on the host (`examples/boot_frames.rs`) without flashing.
+pub fn preview_frame(t: f32) -> Vec<Rgb565> {
+    let mut pixels = vec![Rgb565::BLACK; WIDTH * HEIGHT];
+    paint_scene(&mut Canvas(&mut pixels), t.rem_euclid(LOOP_SECS));
+    pixels
 }
 
 fn row_hash(row: &[Rgb565]) -> u32 {

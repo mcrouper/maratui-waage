@@ -131,6 +131,10 @@ See [docs/home-assistant.md](docs/home-assistant.md) for the full entity list, M
 
 A standalone live dashboard page (temperatures with history, live scale weight, shot timer and weight curve, recent shots, events, device status) served by Node-RED at `http://<node-red-host>:1880/mara`, deployed with `python3 dashboard/deploy.py`. See [dashboard/README.md](dashboard/README.md).
 
+## Color Editor
+
+`python3 tools/color_editor.py` (Python 3 with Tkinter, no other dependencies) opens a drag-and-drop editor for the Dashboard and start screen colors: drag a swatch onto an element in the preview, then "Speichern" writes the palette constants back into `src/screens/dashboard.rs` and `src/screens/connecting.rs` — rebuild and flash to apply. Its "Startvideo" page plays the boot animation rendered by the firmware's own scene code (`examples/boot_frames.rs`, needs the host Rust toolchain), so animation changes can be previewed without flashing.
+
 ## Hardware
 
 Target board: **ESP32 Type-C** with an external **ILI9341** 240×320 TFT display connected over SPI. There is a single physical button.
