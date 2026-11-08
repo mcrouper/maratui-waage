@@ -11,6 +11,8 @@ var MARA_MAX_EVENTS = 30;
 // The firmware reports pump runs under 15 s as `shot_aborted` (rinse / flush, but also a short
 // test pour). Those still go into the shot list when something clearly landed in the cup.
 var MARA_MIN_SHORT_SHOT_G = 5;
+var MARA_TANK_ML = 2300; // keep in sync with TANK_CAPACITY_ML in src/water.rs
+var MARA_MAX_WATER_LOG = 30;
 
 function maraInitialState() {
   return {
@@ -22,6 +24,7 @@ function maraInitialState() {
     shot: null, // current or most recent pump run: { start, end, duration, weight_g, aborted, curve: [[s, g]], hx: [[s, °C]] }
     shots: [], // completed shots, newest first (short ones only with >= MARA_MIN_SHORT_SHOT_G)
     events: [], // mara/events payloads + ts, newest first
+    water: null, // { remaining_ml, low, ts, log: [mara/water payloads + ts, newest first] }
   };
 }
 
@@ -75,6 +78,17 @@ function maraReduce(S, kind, p, now) {
           S.evicted = S.shots.splice(MARA_MAX_SHOTS);
         }
       }
+      return true;
+    }
+    case "water": {
+      if (!p || !p.type || typeof p.remaining_ml !== "number") return false;
+      var W = S.water || { log: [] };
+      W.remaining_ml = p.remaining_ml;
+      W.low = !!p.low;
+      W.ts = now;
+      W.log.unshift(Object.assign({}, p, { ts: now }));
+      if (W.log.length > MARA_MAX_WATER_LOG) W.log.length = MARA_MAX_WATER_LOG;
+      S.water = W;
       return true;
     }
     default:

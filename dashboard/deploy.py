@@ -43,6 +43,7 @@ const DATA_DIR = "__DATA_DIR__" || (env.get("HOME") + "/maratui");
 const SHOTS_FILE = DATA_DIR + "/shots.json";
 const ARCHIVE_FILE = DATA_DIR + "/shotdoku.txt";
 const CUPS_FILE = DATA_DIR + "/cups.json";
+const WATER_FILE = DATA_DIR + "/water.json";
 const IMG_DIR = DATA_DIR + "/shots";
 const RENDER_SCRIPT = DATA_DIR + "/render_shot.py";
 
@@ -54,6 +55,17 @@ function persistCups(cups) {
         fs.renameSync(tmp, CUPS_FILE);
     } catch (e) {
         node.error("Speichern von " + CUPS_FILE + " fehlgeschlagen: " + e.message);
+    }
+}
+
+function persistWater(water) {
+    try {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+        const tmp = WATER_FILE + ".tmp";
+        fs.writeFileSync(tmp, JSON.stringify(water));
+        fs.renameSync(tmp, WATER_FILE);
+    } catch (e) {
+        node.error("Speichern von " + WATER_FILE + " fehlgeschlagen: " + e.message);
     }
 }
 
@@ -169,6 +181,13 @@ try {
     node.error("Lesen von " + CUPS_FILE + " fehlgeschlagen: " + e.message);
 }
 if (typeof S.cups !== "number") S.cups = 0;
+// Tank level + water log: the saved copy unless memory survived a redeploy
+try {
+    if (S.water == null && fs.existsSync(WATER_FILE)) S.water = JSON.parse(fs.readFileSync(WATER_FILE, "utf8"));
+} catch (e) {
+    node.error("Lesen von " + WATER_FILE + " fehlgeschlagen: " + e.message);
+}
+if (S.water === undefined) S.water = null;
 flow.set("mara", S);
 persistShots(S.shots);
 persistCups(S.cups);
@@ -202,6 +221,8 @@ if (S.shots[0] !== newestBefore) {
     node.status({ text: "letzter Shot " + new Date(S.shots[0].ts).toLocaleTimeString("de-DE") + ", " + S.cups + " Tassen" });
 } else if (kind === "cup_counter") {
     persistCups(S.cups); // a value set from outside (e.g. mosquitto_pub) becomes the new count
+} else if (kind === "water") {
+    persistWater(S.water);
 }
 flow.set("mara", S);
 return [{ payload: JSON.stringify({ kind: kind, data: p, ts: now }) }, cupMsg];
