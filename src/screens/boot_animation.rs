@@ -1,6 +1,6 @@
-//! Start screen animation, looping while the ESP connects and waits for the machine: a Mara X
-//! overheats and explodes, a red sports car pulls up through the smoke, its driver gets out and
-//! waves with her coffee to go, and they drive off — then it starts over.
+//! Start screen animation, looping while the ESP connects and waits for the machine: a red
+//! sports car pulls up, its driver gets out and waves with her coffee to go, a flamboyant alien
+//! in a rainbow-flagged saucer beams her up — and the overloaded saucer explodes in the sky.
 //!
 //! The scene is painted at half resolution into a small RGB565 canvas (pixel-art look, ~27 KB
 //! instead of a 107 KB full-size frame) and streamed to the display doubled, straight past
@@ -22,25 +22,32 @@ const SCALE: usize = 2;
 /// at y 182, where the loading block starts.
 const TOP_PX: i32 = 14;
 const FRAME_INTERVAL: Duration = Duration::from_millis(66);
-const LOOP_SECS: f32 = 10.0;
+const LOOP_SECS: f32 = 10.5;
 
 // ── Timeline (seconds into the loop) ─────────────────────────────────────────────────────────
-const SHAKE_START: f32 = 0.9;
-const BOOM: f32 = 2.4;
-const CAR_ARRIVE: (f32, f32) = (3.2, 5.0);
-const DRIVER_OUT: (f32, f32) = (5.2, 6.0);
-const DRIVER_BACK: (f32, f32) = (8.2, 8.9);
-const CAR_LEAVE: (f32, f32) = (8.9, 10.0);
+const FADE_IN: f32 = 0.4;
+const CAR_ARRIVE: (f32, f32) = (0.2, 2.0);
+const DRIVER_OUT: (f32, f32) = (2.2, 3.0);
+const WAVE: (f32, f32) = (3.0, 4.4);
+const UFO_ARRIVE: (f32, f32) = (3.4, 4.6);
+const BEAM: (f32, f32) = (4.8, 7.0);
+const ABDUCT: (f32, f32) = (5.1, 6.8);
+const BOOM: f32 = 7.8;
+const FADE_OUT: f32 = 9.9;
 
 // ── Layout (scene pixels) ────────────────────────────────────────────────────────────────────
 const SIDEWALK_Y: i32 = 60;
 const ROAD_Y: i32 = 64;
-const MACHINE_X: i32 = 14;
-const MACHINE_Y: i32 = 36;
 const CAR_Y: i32 = 63;
-const CAR_PARK_X: f32 = 78.0;
+const CAR_PARK_X: f32 = 40.0;
 const CAR_ENTRY_X: f32 = 165.0;
 const DRIVER_Y: i32 = 56;
+/// Where she stands: just behind the parked car.
+const SPOT_X: f32 = CAR_PARK_X + 52.0;
+/// Saucer center while hovering above her.
+const HOVER: (f32, f32) = (SPOT_X + 5.0, 24.0);
+/// How far the beam lifts her: from the sidewalk up into the saucer's belly.
+const LIFT_PX: f32 = 28.0;
 
 pub struct BootAnimation {
     canvas: Vec<Rgb565>,
@@ -131,28 +138,39 @@ fn paint_scene(c: &mut Canvas, t: f32) {
     paint_backdrop(c, t);
     paint_title(c);
 
-    if t < BOOM {
-        paint_machine(c, t);
-    } else {
-        paint_wreck(c, t);
-        paint_debris(c, t - BOOM);
-        paint_smoke(c, t - BOOM);
-        paint_fireball(c, t - BOOM);
+    let car_x = car_x(t);
+    paint_car(c, car_x, t);
+
+    if let Some((x, lift, walking)) = driver_pos(t, car_x) {
+        let alpha = phase(t, DRIVER_OUT.0, DRIVER_OUT.0 + 0.3) * (1.0 - phase(lift, 0.8, 1.0));
+        paint_driver(c, x, lift, t, walking, alpha);
     }
 
-    if let Some(car_x) = car_x(t) {
-        paint_car(c, car_x, t);
-        if let Some((x, walking)) = driver_x(t, car_x) {
-            let fade = phase(t, DRIVER_OUT.0, DRIVER_OUT.0 + 0.3)
-                .min(1.0 - phase(t, DRIVER_BACK.1 - 0.2, DRIVER_BACK.1));
-            paint_driver(c, x, t, walking, fade);
+    if let Some((ux, uy)) = ufo_pos(t) {
+        if (BEAM.0..BEAM.1).contains(&t) {
+            paint_beam(c, ux, uy, t);
+        }
+        paint_ufo(c, ux, uy, t);
+    }
+
+    if t >= BOOM {
+        let (bx, by) = ufo_path(BOOM);
+        let age = t - BOOM;
+        paint_debris(c, bx, by, age);
+        paint_smoke(c, bx, by, age);
+        paint_fireball(c, bx, by, age);
+
+        // White flash of the explosion over everything.
+        let flash = 1.0 - phase(t, BOOM, BOOM + 0.35);
+        if flash > 0.0 {
+            c.wash(rgb(0xFFF8E8), flash * 0.85);
         }
     }
 
-    // White flash of the explosion over everything.
-    let flash = 1.0 - phase(t, BOOM, BOOM + 0.35);
-    if t >= BOOM && flash > 0.0 {
-        c.wash(rgb(0xFFF8E8), flash * 0.85);
+    // Fade from and to black, so the loop restarts without a jump.
+    let dark = (1.0 - phase(t, 0.0, FADE_IN)).max(phase(t, FADE_OUT, LOOP_SECS));
+    if dark > 0.0 {
+        c.wash(Rgb565::BLACK, dark);
     }
 }
 
@@ -229,159 +247,15 @@ fn paint_title(c: &mut Canvas) {
     c.text(x, y, "MAXI TUI", rgb(0xFFB000));
 }
 
-/// The Mara X before it blows: shaking harder, glowing red and puffing steam as it overheats.
-fn paint_machine(c: &mut Canvas, t: f32) {
-    let heat = phase(t, SHAKE_START, BOOM);
-    let jitter = if heat > 0.0 {
-        ((t * 30.0) as i32 % 3) - 1
-    } else {
-        0
-    };
-    let (x, y) = (MACHINE_X + jitter, MACHINE_Y);
-
-    let glow = rgb(0xFF3010);
-    c.sprite(x, y, MARA_X, 1.0, |ch| {
-        machine_color(ch).map(|color| match ch {
-            'S' | 's' | 'c' => mix(color, glow, heat * 0.65),
-            _ => color,
-        })
-    });
-
-    // Steam wand and its knob.
-    c.rect(x + 22, y + 8, 2, 1, rgb(0x101010));
-    c.rect(x + 23, y + 9, 1, 10, rgb(0xF4F6F8));
-
-    // Power LED blinking faster and faster, coffee dripping into the cup.
-    let blink = (t * (2.0 + heat * 14.0)) as i32 % 2 == 0;
-    c.set(
-        x + 3,
-        y + 9,
-        if blink { rgb(0xFF2000) } else { rgb(0x502010) },
-    );
-    if (t * 4.0) as i32 % 2 == 0 {
-        c.set(x + 11, y + 16, rgb(0x5A3418));
-    }
-
-    // Steam puffing out of the top, thicker as it heats up.
-    for k in 0..3 {
-        let age = (t * 1.3 + k as f32 / 3.0).fract();
-        let px = x as f32 + 12.0 + (age * 9.0 + k as f32).sin() * 3.0;
-        let py = y as f32 - age * 16.0;
-        c.disc(
-            px,
-            py,
-            1.0 + age * 3.0,
-            rgb(0xE8E8F0),
-            (1.0 - age) * (0.25 + heat * 0.6),
-        );
-    }
-}
-
-/// What's left of the machine: a charred heap with glowing embers.
-fn paint_wreck(c: &mut Canvas, t: f32) {
-    for dx in 0..22 {
-        let height = 2 + (noise(dx as u32 + 500) * 5.0) as i32;
-        c.rect(
-            MACHINE_X + 1 + dx,
-            SIDEWALK_Y - height,
-            1,
-            height,
-            rgb(0x2A2220),
-        );
-    }
-    for i in 0..6 {
-        let x = MACHINE_X + 2 + (noise(i + 600) * 20.0) as i32;
-        let y = SIDEWALK_Y - 1 - (noise(i + 700) * 3.0) as i32;
-        let hot = ((t * 5.0 + noise(i + 800) * 4.0) as i32) % 3 != 0;
-        c.set(x, y, if hot { rgb(0xFF7A1A) } else { rgb(0x8A2A10) });
-    }
-}
-
-fn paint_fireball(c: &mut Canvas, age: f32) {
-    if age > 1.6 {
-        return;
-    }
-    let grow = ease_out(phase(age, 0.0, 0.5));
-    let fade = 1.0 - phase(age, 0.5, 1.6);
-    let radius = 3.0 + grow * 21.0;
-    let (cx, cy) = ((MACHINE_X + 12) as f32, (MACHINE_Y + 12) as f32);
-    c.disc(cx, cy, radius, rgb(0xFF5A10), fade * 0.9);
-    c.disc(cx, cy - 1.0, radius * 0.7, rgb(0xFFB030), fade);
-    c.disc(
-        cx,
-        cy - 2.0,
-        radius * 0.4,
-        rgb(0xFFF0B0),
-        fade * (1.0 - grow * 0.5),
-    );
-}
-
-fn paint_smoke(c: &mut Canvas, age: f32) {
-    for k in 0..8 {
-        let puff_age = age - 0.3 - k as f32 * 0.15;
-        if !(0.0..5.0).contains(&puff_age) {
-            continue;
-        }
-        let x = (MACHINE_X + 12) as f32 + (noise(k + 900) - 0.5) * 24.0 + puff_age * 4.0;
-        let y = (MACHINE_Y + 10) as f32 - puff_age * 7.0 - noise(k + 950) * 6.0;
-        c.disc(
-            x,
-            y,
-            3.0 + puff_age * 2.2,
-            rgb(0x4A4450),
-            0.55 * (1.0 - puff_age / 5.0),
-        );
-    }
-}
-
-/// Machine parts flying off in ballistic arcs and landing on the sidewalk.
-fn paint_debris(c: &mut Canvas, age: f32) {
-    const GRAVITY: f32 = 90.0;
-    let (cx, cy) = ((MACHINE_X + 12) as f32, (MACHINE_Y + 12) as f32);
-    for i in 0..22 {
-        let vx = (noise(i) - 0.5) * 100.0;
-        let vy = -30.0 - noise(i + 50) * 65.0;
-        let ground = SIDEWALK_Y as f32 + noise(i + 70) * 3.0;
-        // Time at which the arc reaches the ground; the part stays where it landed.
-        let landing = (-vy + (vy * vy + 2.0 * GRAVITY * (ground - cy)).sqrt()) / GRAVITY;
-        let t = age.min(landing);
-        let (x, y) = (
-            (cx + vx * t) as i32,
-            (cy + vy * t + 0.5 * GRAVITY * t * t) as i32,
-        );
-        match i % 5 {
-            // The pressure gauge.
-            0 => {
-                c.rect(x, y, 2, 2, rgb(0xF0F0F0));
-                c.set(x + 1, y, rgb(0xD02020));
-            }
-            // Portafilter.
-            1 => {
-                c.rect(x, y, 3, 1, rgb(0x101010));
-                c.rect(x + 3, y, 2, 2, rgb(0xF4F6F8));
-            }
-            // Panels.
-            2 | 3 => c.rect(x, y, 2, 2, rgb(0xB8BCC4)),
-            // Coffee drops, soaking away once they land.
-            _ if age < landing => c.set(x, y, rgb(0x5A3418)),
-            _ => {}
-        }
-    }
-}
-
-/// Car x position (sprite's left edge), or `None` when it's off stage.
-fn car_x(t: f32) -> Option<f32> {
-    if t < CAR_ARRIVE.0 {
-        return None;
-    }
+/// Car x position (sprite's left edge): rolling in from the right, then parked for good.
+fn car_x(t: f32) -> f32 {
     let arrive = ease_out(phase(t, CAR_ARRIVE.0, CAR_ARRIVE.1));
-    let leave = ease_in(phase(t, CAR_LEAVE.0, CAR_LEAVE.1));
-    Some(CAR_ENTRY_X - (CAR_ENTRY_X - CAR_PARK_X) * arrive - (CAR_PARK_X + 60.0) * leave)
+    CAR_ENTRY_X - (CAR_ENTRY_X - CAR_PARK_X) * arrive
 }
 
 fn paint_car(c: &mut Canvas, car_x: f32, t: f32) {
     let x = car_x.round() as i32;
-    let moving = phase(t, CAR_ARRIVE.0, CAR_ARRIVE.1) < 1.0 || t > CAR_LEAVE.0;
+    let moving = (CAR_ARRIVE.0..CAR_ARRIVE.1).contains(&t);
 
     // Headlight beam ahead (the car faces left).
     for d in 1..34 {
@@ -418,43 +292,45 @@ fn paint_car(c: &mut Canvas, car_x: f32, t: f32) {
     }
 }
 
-/// Driver x position and whether she is walking, or `None` while she's in the car.
-fn driver_x(t: f32, car_x: f32) -> Option<(f32, bool)> {
+/// Driver x, how far the beam lifted her (`0..=1`) and whether she's walking, or `None` while
+/// she's in the car or gone into the saucer.
+fn driver_pos(t: f32, car_x: f32) -> Option<(f32, f32, bool)> {
     let door = car_x + 22.0;
-    let spot = car_x + 52.0;
-    if t < DRIVER_OUT.0 || t >= DRIVER_BACK.1 {
+    if t < DRIVER_OUT.0 || t >= ABDUCT.1 {
         None
     } else if t < DRIVER_OUT.1 {
-        Some((
-            door + (spot - door) * phase(t, DRIVER_OUT.0, DRIVER_OUT.1),
-            true,
-        ))
-    } else if t < DRIVER_BACK.0 {
-        Some((spot, false))
+        let walked = phase(t, DRIVER_OUT.0, DRIVER_OUT.1);
+        Some((door + (SPOT_X - door) * walked, 0.0, true))
     } else {
-        Some((
-            spot - (spot - door) * phase(t, DRIVER_BACK.0, DRIVER_BACK.1),
-            true,
-        ))
+        let lift = ease_in_out(phase(t, ABDUCT.0, ABDUCT.1));
+        Some((SPOT_X, lift, false))
     }
 }
 
-fn paint_driver(c: &mut Canvas, x: f32, t: f32, walking: bool, alpha: f32) {
+fn paint_driver(c: &mut Canvas, x: f32, lift: f32, t: f32, walking: bool, alpha: f32) {
     let step = (t * 7.0) as i32 % 2 == 1;
-    let x = x.round() as i32;
-    let y = DRIVER_Y - i32::from(walking && step);
+    let floating = lift > 0.0;
+    // Floating up, she sways in the beam.
+    let sway = if floating {
+        ((t * 4.0).sin() * 1.5).round() as i32
+    } else {
+        0
+    };
+    let x = x.round() as i32 + sway;
+    let y = DRIVER_Y - i32::from(walking && step) - (lift * LIFT_PX).round() as i32;
     let skin = rgb(0xF5C8A8);
 
     c.sprite(x, y, DRIVER, alpha, driver_color);
 
-    // Legs (stepping while walking) and shoes.
-    let (left_lift, right_lift) = match (walking, step) {
-        (false, _) => (0, 0),
-        (true, false) => (1, 0),
-        (true, true) => (0, 1),
+    // Legs (stepping while walking, dangling while floating) and shoes.
+    let (left_lift, right_lift) = match (walking, step, floating) {
+        (true, false, _) => (1, 0),
+        (true, true, _) => (0, 1),
+        (false, _, true) => (i32::from(step), i32::from(!step)),
+        _ => (0, 0),
     };
-    for (leg_x, lift) in [(4, left_lift), (6, right_lift)] {
-        let bottom = y + 22 - lift;
+    for (leg_x, leg_lift) in [(4, left_lift), (6, right_lift)] {
+        let bottom = y + 22 - leg_lift;
         c.blend_rect(x + leg_x, y + 17, 1, bottom - (y + 17), skin, alpha);
         c.blend_rect(
             x + leg_x - 1 + (leg_x / 6),
@@ -471,8 +347,8 @@ fn paint_driver(c: &mut Canvas, x: f32, t: f32, walking: bool, alpha: f32) {
     c.blend_rect(x - 2, y + 12, 2, 3, rgb(0xF4F0E8), alpha);
     c.blend_rect(x - 2, y + 13, 2, 1, rgb(0x8A5A30), alpha);
 
-    // Right arm swings while walking and waves once she's standing.
-    let wave = (t * 5.0) as i32 % 2 == 0;
+    // Right arm swings while walking, waves while standing, flails while floating.
+    let wave = (t * if floating { 9.0 } else { 5.0 }) as i32 % 2 == 0;
     let hand = match (walking, wave) {
         (true, _) => (x + 10, y + 15 - i32::from(step)),
         (false, true) => (x + 12, y + 3),
@@ -486,61 +362,160 @@ fn paint_driver(c: &mut Canvas, x: f32, t: f32, walking: bool, alpha: f32) {
     c.blend(x + 10, y + 7 - i32::from(flutter), rgb(0xC9A048), alpha);
 
     // A heart floating up while she waves.
-    if !walking {
-        let rise = phase(t, DRIVER_OUT.1 + 0.3, DRIVER_BACK.0);
-        if rise > 0.0 && rise < 1.0 {
-            let heart_y = y - 6 - (rise * 14.0) as i32;
-            c.sprite(x + 3, heart_y, HEART, alpha * (1.0 - rise), |ch| {
-                (ch == 'P').then(|| rgb(0xFF5A8A))
-            });
+    let rise = phase(t, WAVE.0, WAVE.1);
+    if !walking && !floating && rise > 0.0 && rise < 1.0 {
+        let heart_y = y - 6 - (rise * 14.0) as i32;
+        c.sprite(x + 3, heart_y, HEART, alpha * (1.0 - rise), |ch| {
+            (ch == 'P').then(|| rgb(0xFF5A8A))
+        });
+    }
+}
+
+/// Saucer center over the whole loop: swooping in from the top left, hovering with a bob,
+/// then shaking and climbing as it overloads until `BOOM`.
+fn ufo_path(t: f32) -> (f32, f32) {
+    let arrive = ease_out(phase(t, UFO_ARRIVE.0, UFO_ARRIVE.1));
+    let (x0, y0) = (-20.0, -14.0);
+    let bob = (t * 3.0).sin();
+    let strain = phase(t, BEAM.1, BOOM);
+    let shake = if strain > 0.0 {
+        (t * 40.0).sin() * strain * 2.0
+    } else {
+        0.0
+    };
+    (
+        x0 + (HOVER.0 - x0) * arrive + shake,
+        y0 + (HOVER.1 - y0) * arrive + bob - ease_in(strain) * 8.0,
+    )
+}
+
+fn ufo_pos(t: f32) -> Option<(f32, f32)> {
+    (UFO_ARRIVE.0..BOOM).contains(&t).then(|| ufo_path(t))
+}
+
+fn paint_beam(c: &mut Canvas, ux: f32, uy: f32, t: f32) {
+    let on = phase(t, BEAM.0, BEAM.0 + 0.3).min(1.0 - phase(t, BEAM.1 - 0.3, BEAM.1));
+    let top = uy as i32 + 5;
+    let bottom = DRIVER_Y + 23;
+    for y in top..bottom {
+        let f = (y - top) as f32 / (bottom - top) as f32;
+        let half = 4.0 + f * 9.0;
+        // Bright bands running down the beam.
+        let band = ((y as f32 * 0.5 - t * 12.0).sin() * 0.5 + 0.5) * 0.15;
+        for x in (ux - half) as i32..=(ux + half) as i32 {
+            c.blend(x, y, rgb(0xD890FF), on * (0.22 + band));
+        }
+    }
+}
+
+fn paint_ufo(c: &mut Canvas, ux: f32, uy: f32, t: f32) {
+    let (x, y) = (ux.round() as i32, uy.round() as i32);
+
+    // Rainbow flag waving on a pole atop the dome, clear of the title on the right.
+    const FLAG: [u32; 6] = [0xE40303, 0xFF8C00, 0xFFED00, 0x008026, 0x24408E, 0x732982];
+    c.rect(x - 5, y - 15, 1, 8, rgb(0xB8BCC4));
+    for dx in 0..8 {
+        let wave = ((t * 8.0 - dx as f32 * 0.9).sin() * 0.8).round() as i32;
+        for (row, &color) in FLAG.iter().enumerate() {
+            c.set(x - 6 - dx, y - 15 + row as i32 + wave, rgb(color));
+        }
+    }
+
+    // Glass dome with the alien inside: winking now and then, boa fluttering.
+    c.disc(ux + 0.5, uy, 8.5, rgb(0x203A60), 0.75);
+    let wink = (t * 1.2).fract() < 0.18;
+    let flutter = (t * 6.0) as i32 % 2 == 0;
+    c.sprite(x - 4, y - 8, ALIEN, 1.0, |ch| match ch {
+        'E' if wink => None,
+        'b' if flutter => Some(rgb(0xFF9AD0)),
+        'B' if flutter => Some(rgb(0xFF4FA8)),
+        _ => alien_color(ch),
+    });
+    if wink {
+        c.rect(x + 1, y - 4, 2, 1, rgb(0x101010));
+    }
+    c.blend_rect(x - 4, y - 7, 1, 3, rgb(0xFFFFFF), 0.45);
+
+    c.sprite(x - 14, y - 1, SAUCER, 1.0, saucer_color);
+
+    // Rainbow lights chasing around the rim.
+    for i in 0..8 {
+        let color = FLAG[(i + (t * 10.0) as usize) % FLAG.len()];
+        c.set(x - 12 + i as i32 * 3 + 1, y + 2, rgb(color));
+    }
+}
+
+fn paint_fireball(c: &mut Canvas, cx: f32, cy: f32, age: f32) {
+    if age > 1.6 {
+        return;
+    }
+    let grow = ease_out(phase(age, 0.0, 0.5));
+    let fade = 1.0 - phase(age, 0.5, 1.6);
+    let radius = 3.0 + grow * 21.0;
+    c.disc(cx, cy, radius, rgb(0xFF5A10), fade * 0.9);
+    c.disc(cx, cy - 1.0, radius * 0.7, rgb(0xFFB030), fade);
+    c.disc(
+        cx,
+        cy - 2.0,
+        radius * 0.4,
+        rgb(0xFFF0B0),
+        fade * (1.0 - grow * 0.5),
+    );
+}
+
+fn paint_smoke(c: &mut Canvas, cx: f32, cy: f32, age: f32) {
+    for k in 0..8 {
+        let puff_age = age - 0.3 - k as f32 * 0.15;
+        if !(0.0..5.0).contains(&puff_age) {
+            continue;
+        }
+        let x = cx + (noise(k + 900) - 0.5) * 24.0 + puff_age * 4.0;
+        let y = cy - 2.0 - puff_age * 3.0 - noise(k + 950) * 6.0;
+        c.disc(
+            x,
+            y,
+            3.0 + puff_age * 2.2,
+            rgb(0x4A4450),
+            0.55 * (1.0 - puff_age / 5.0),
+        );
+    }
+}
+
+/// Saucer parts, rainbow sparks, her coffee cup and a heart flying off in ballistic arcs and
+/// landing on the sidewalk.
+fn paint_debris(c: &mut Canvas, cx: f32, cy: f32, age: f32) {
+    const GRAVITY: f32 = 90.0;
+    const SPARKS: [u32; 6] = [0xE40303, 0xFF8C00, 0xFFED00, 0x008026, 0x24408E, 0x732982];
+    for i in 0..26 {
+        let vx = (noise(i) - 0.5) * 110.0;
+        let vy = -20.0 - noise(i + 50) * 55.0;
+        let ground = SIDEWALK_Y as f32 + noise(i + 70) * 3.0;
+        // Time at which the arc reaches the ground; the part stays where it landed.
+        let landing = (-vy + (vy * vy + 2.0 * GRAVITY * (ground - cy)).sqrt()) / GRAVITY;
+        let t = age.min(landing);
+        let (x, y) = (
+            (cx + vx * t) as i32,
+            (cy + vy * t + 0.5 * GRAVITY * t * t) as i32,
+        );
+        match i % 6 {
+            // Hull panels.
+            0 | 1 => c.rect(x, y, 2, 2, rgb(0xB8BCC4)),
+            // The coffee to go.
+            2 if i == 2 => {
+                c.rect(x, y, 2, 3, rgb(0xF4F0E8));
+                c.set(x, y + 1, rgb(0x8A5A30));
+                c.set(x + 1, y + 1, rgb(0x8A5A30));
+            }
+            // A heart.
+            3 if i == 3 => c.sprite(x, y, HEART, 1.0, |ch| (ch == 'P').then(|| rgb(0xFF5A8A))),
+            // Rainbow sparks, burning out once they land.
+            _ if age < landing => c.set(x, y, rgb(SPARKS[i as usize % SPARKS.len()])),
+            _ => {}
         }
     }
 }
 
 // ── Sprites ──────────────────────────────────────────────────────────────────────────────────
-
-/// Lelit Mara X, front view: gauge, E61 group with portafilter, cup on the drip tray.
-const MARA_X: &[&str] = &[
-    "..dddddddddddddddddddd..",
-    ".dccccccccccccccccccccd.",
-    ".sSSSSSSSSSSSSSSSSSSSSs.",
-    ".sSSSSSSSSkkkkSSSSSSSSs.",
-    ".sSSSSSSSkggggkSSSSSSSs.",
-    ".sSSSSSSSkggrgkSSSSSSSs.",
-    ".sSSSSSSSkggggkSSSSSSSs.",
-    ".sSSSSSSSSkkkkSSSSSSSSs.",
-    ".sSSSSSSSSSSSSSSSSSSSSs.",
-    ".sSSSSSSSSSSSSSSSSSSSSs.",
-    ".sSSSSSSSccccccSSSSSSSs.",
-    ".sSSSSSSccccccccSSSSSSs.",
-    ".sSSSSSSSccccccSSSSSSSs.",
-    ".sSSSSSSSSddddSSSSSSSSs.",
-    ".sSSSSkkkkddddSSSSSSSSs.",
-    ".sSSSSdddddccdddddSSSSs.",
-    ".sSSSSddddddddddddSSSSs.",
-    ".sSSSSddddddddddddSSSSs.",
-    ".sSSSSddddwwwwddddSSSSs.",
-    ".sSSSSddddwwwwddddSSSSs.",
-    ".sSSSSccccccccccccSSSSs.",
-    ".sSSSSkckckckckckcSSSSs.",
-    ".sSSSSSSSSSSSSSSSSSSSSs.",
-    ".ssssssssssssssssssssss.",
-    "..kk................kk..",
-];
-
-fn machine_color(ch: char) -> Option<Rgb565> {
-    Some(rgb(match ch {
-        'S' => 0xC8CCD0,
-        's' => 0x8A9096,
-        'c' => 0xF4F6F8,
-        'd' => 0x30343A,
-        'k' => 0x101010,
-        'g' => 0xF0F0F0,
-        'r' => 0xD02020,
-        'w' => 0xFFFFFF,
-        _ => return None,
-    }))
-}
 
 /// Red rear-engined sports coupe, side view facing left. Wheels are drawn separately.
 const SPORTS_CAR: &[&str] = &[
@@ -610,6 +585,45 @@ fn driver_color(ch: char) -> Option<Rgb565> {
 }
 
 const HEART: &[&str] = &[".P.P.", "PPPPP", ".PPP.", "..P.."];
+
+/// Flying saucer hull; the dome and the alien in it sit on top, drawn separately.
+const SAUCER: &[&str] = &[
+    "........ssssssssssssss.......",
+    "...ssSSSSSSSSSSSSSSSSSSSSss..",
+    ".sSSSSSSSSSSSSSSSSSSSSSSSSSs.",
+    "sddddddddddddddddddddddddddds",
+    ".sssssssssssssssssssssssssss.",
+    "......kkkkkkkkkkkkkkkkk......",
+];
+
+fn saucer_color(ch: char) -> Option<Rgb565> {
+    Some(rgb(match ch {
+        'S' => 0xC8CCD8,
+        's' => 0x8A90A0,
+        'd' => 0x40445A,
+        'k' => 0x2A2C3A,
+        _ => return None,
+    }))
+}
+
+/// The alien in the dome: long lashes, lipstick and a pink feather boa.
+const ALIEN: &[&str] = &[
+    "..p..p..", "..G..G..", ".GGGGGG.", "GLLGGLLG", "GEeGGEeG", "GGGGGGGG", ".GGmmGG.", "bBbBbBbB",
+];
+
+fn alien_color(ch: char) -> Option<Rgb565> {
+    Some(rgb(match ch {
+        'G' => 0x9AE89A,
+        'p' => 0xFF4FA8,
+        'L' => 0x101010,
+        'E' => 0x101010,
+        'e' => 0xFFFFFF,
+        'm' => 0xE0206A,
+        'b' => 0xFF4FA8,
+        'B' => 0xFF9AD0,
+        _ => return None,
+    }))
+}
 
 /// 5x7 pixel font, just the letters of the title.
 fn glyph(ch: char) -> Option<[&'static str; 7]> {
@@ -772,6 +786,10 @@ fn ease_in(p: f32) -> f32 {
     p.powi(3)
 }
 
+fn ease_in_out(p: f32) -> f32 {
+    p * p * (3.0 - 2.0 * p)
+}
+
 /// Deterministic pseudo-random value in `0..1` for seed `i`.
 fn noise(i: u32) -> f32 {
     let mut x = i.wrapping_mul(0x9E37_79B9) ^ 0x85EB_CA6B;
@@ -787,7 +805,7 @@ mod tests {
 
     #[test]
     fn sprites_are_rectangular() {
-        for sprite in [MARA_X, SPORTS_CAR, DRIVER, HEART] {
+        for sprite in [SPORTS_CAR, DRIVER, HEART, SAUCER, ALIEN] {
             let width = sprite[0].len();
             assert!(sprite.iter().all(|row| row.len() == width));
         }
@@ -799,5 +817,12 @@ mod tests {
         for frame in 0..(LOOP_SECS * 30.0) as usize {
             paint_scene(&mut Canvas(&mut canvas), frame as f32 / 30.0);
         }
+    }
+
+    #[test]
+    fn she_is_beamed_up_before_the_saucer_explodes() {
+        assert!(driver_pos(ABDUCT.1, CAR_PARK_X).is_none());
+        assert!(ABDUCT.1 <= BEAM.1 && BEAM.1 < BOOM);
+        assert!(ufo_pos(BOOM).is_none());
     }
 }
