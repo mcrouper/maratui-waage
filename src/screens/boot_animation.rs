@@ -1,6 +1,7 @@
 //! Start screen animation, looping while the ESP connects and waits for the machine: a red
-//! sports car pulls up, its driver gets out and waves with her coffee to go, a flamboyant alien
-//! in a rainbow-flagged saucer beams her up — and the overloaded saucer explodes in the sky.
+//! sports car pulls up, its driver gets out and waves with her coffee to go, cheekily flashes
+//! her polka-dot panties at the arriving saucer, a flamboyant alien in that rainbow-flagged
+//! saucer beams her up — and the overloaded saucer explodes in the sky. Then: time for a doppio.
 //!
 //! The scene is painted at half resolution into a small RGB565 canvas (pixel-art look, ~27 KB
 //! instead of a 107 KB full-size frame) and streamed to the display doubled, straight past
@@ -22,18 +23,20 @@ const SCALE: usize = 2;
 /// at y 182, where the loading block starts.
 const TOP_PX: i32 = 14;
 const FRAME_INTERVAL: Duration = Duration::from_millis(66);
-const LOOP_SECS: f32 = 10.5;
+const LOOP_SECS: f32 = 11.5;
 
 // ── Timeline (seconds into the loop) ─────────────────────────────────────────────────────────
 const FADE_IN: f32 = 0.4;
 const CAR_ARRIVE: (f32, f32) = (0.2, 2.0);
 const DRIVER_OUT: (f32, f32) = (2.2, 3.0);
-const WAVE: (f32, f32) = (3.0, 4.4);
+const WAVE: (f32, f32) = (3.0, 4.0);
+const MOON: (f32, f32) = (4.0, 4.9);
 const UFO_ARRIVE: (f32, f32) = (3.4, 4.6);
 const BEAM: (f32, f32) = (4.8, 7.0);
 const ABDUCT: (f32, f32) = (5.1, 6.8);
 const BOOM: f32 = 7.8;
-const FADE_OUT: f32 = 9.9;
+const CLOSING_TEXT: f32 = 8.6;
+const FADE_OUT: f32 = 10.9;
 
 // ── Layout (scene pixels) ────────────────────────────────────────────────────────────────────
 const SIDEWALK_Y: i32 = 60;
@@ -167,6 +170,16 @@ fn paint_scene(c: &mut Canvas, t: f32) {
         }
     }
 
+    // Closing line, fading in once the smoke clears.
+    let text_in = phase(t, CLOSING_TEXT, CLOSING_TEXT + 0.6);
+    if text_in > 0.0 {
+        const LINE: &str = "Jetzt einen Doppio!";
+        let x = (WIDTH as i32 - LINE.len() as i32 * 6 + 1) / 2;
+        let y = 30 - ((1.0 - ease_out(text_in)) * 6.0) as i32;
+        c.text(x + 1, y + 1, LINE, rgb(0x2A1008), text_in);
+        c.text(x, y, LINE, rgb(0xFFD060), text_in);
+    }
+
     // Fade from and to black, so the loop restarts without a jump.
     let dark = (1.0 - phase(t, 0.0, FADE_IN)).max(phase(t, FADE_OUT, LOOP_SECS));
     if dark > 0.0 {
@@ -243,8 +256,8 @@ fn paint_backdrop(c: &mut Canvas, t: f32) {
 
 fn paint_title(c: &mut Canvas) {
     let (x, y) = (WIDTH as i32 - 50, 4);
-    c.text(x + 1, y + 1, "MAXI TUI", rgb(0x3A1A10));
-    c.text(x, y, "MAXI TUI", rgb(0xFFB000));
+    c.text(x + 1, y + 1, "MAXI TUI", rgb(0x3A1A10), 1.0);
+    c.text(x, y, "MAXI TUI", rgb(0xFFB000), 1.0);
 }
 
 /// Car x position (sprite's left edge): rolling in from the right, then parked for good.
@@ -316,11 +329,15 @@ fn paint_driver(c: &mut Canvas, x: f32, lift: f32, t: f32, walking: bool, alpha:
     } else {
         0
     };
-    let x = x.round() as i32 + sway;
+    // Just before the beam hits, she turns round, flips her skirt up and wiggles.
+    let mooning = !walking && !floating && (MOON.0..MOON.1).contains(&t);
+    let wiggle = i32::from(mooning && (t * 8.0) as i32 % 2 == 0);
+    let x = x.round() as i32 + sway + wiggle;
     let y = DRIVER_Y - i32::from(walking && step) - (lift * LIFT_PX).round() as i32;
     let skin = rgb(0xF5C8A8);
 
-    c.sprite(x, y, DRIVER, alpha, driver_color);
+    let body = if mooning { DRIVER_REAR } else { DRIVER };
+    c.sprite(x, y, body, alpha, driver_color);
 
     // Legs (stepping while walking, dangling while floating) and shoes.
     let (left_lift, right_lift) = match (walking, step, floating) {
@@ -340,6 +357,13 @@ fn paint_driver(c: &mut Canvas, x: f32, lift: f32, t: f32, walking: bool, alpha:
             rgb(0xC01030),
             alpha,
         );
+    }
+
+    if mooning {
+        // Both hands hold the skirt up.
+        c.blend_line(x + 1, y + 9, x + 1, y + 12, skin, alpha);
+        c.blend_line(x + 9, y + 9, x + 9, y + 12, skin, alpha);
+        return;
     }
 
     // Left arm holds a coffee to go.
@@ -579,10 +603,33 @@ fn driver_color(ch: char) -> Option<Rgb565> {
         'E' => 0x2A4060,
         'L' => 0xD04060,
         'D' => 0x2E5AAC,
+        'P' => 0xFF7AB8,
+        'w' => 0xFFFFFF,
         'd' => 0x1E3C78,
         _ => return None,
     }))
 }
+
+/// The driver seen from behind with her skirt flipped up over polka-dot panties.
+const DRIVER_REAR: &[&str] = &[
+    "...yYYYy...",
+    "..yYYYYYy..",
+    ".yYYYYYYYy.",
+    ".YYYYYYYYY.",
+    ".YYYYYYYYY.",
+    ".YYYYYYYYY.",
+    ".YYyYYYyYY.",
+    ".YYYYYYYYY.",
+    ".YYDDDDDYY.",
+    ".YyDDDDDyY.",
+    "..yDDDDDy..",
+    "...DdDdD...",
+    ".DDDDDDDDD.",
+    "..PPwPPwP..",
+    "..PwPPwPP..",
+    "..FFfPfFF..",
+    "...FF.FF...",
+];
 
 const HEART: &[&str] = &[".P.P.", "PPPPP", ".PPP.", "..P.."];
 
@@ -645,6 +692,36 @@ fn glyph(ch: char) -> Option<[&'static str; 7]> {
         ],
         'U' => [
             "X...X", "X...X", "X...X", "X...X", "X...X", "X...X", ".XXX.",
+        ],
+        'J' => [
+            "..XXX", "...X.", "...X.", "...X.", "...X.", "X..X.", ".XX..",
+        ],
+        'D' => [
+            "XXXX.", "X...X", "X...X", "X...X", "X...X", "X...X", "XXXX.",
+        ],
+        'e' => [
+            ".....", ".....", ".XXX.", "X...X", "XXXXX", "X....", ".XXX.",
+        ],
+        't' => [
+            "..X..", "..X..", "XXXXX", "..X..", "..X..", "..X.X", "...X.",
+        ],
+        'z' => [
+            ".....", ".....", "XXXXX", "...X.", "..X..", ".X...", "XXXXX",
+        ],
+        'i' => [
+            "..X..", ".....", ".XX..", "..X..", "..X..", "..X..", ".XXX.",
+        ],
+        'n' => [
+            ".....", ".....", "XXXX.", "X...X", "X...X", "X...X", "X...X",
+        ],
+        'o' => [
+            ".....", ".....", ".XXX.", "X...X", "X...X", "X...X", ".XXX.",
+        ],
+        'p' => [
+            ".....", "XXXX.", "X...X", "X...X", "XXXX.", "X....", "X....",
+        ],
+        '!' => [
+            "..X..", "..X..", "..X..", "..X..", "..X..", ".....", "..X..",
         ],
         _ => return None,
     })
@@ -739,10 +816,10 @@ impl Canvas<'_> {
         }
     }
 
-    fn text(&mut self, x: i32, y: i32, text: &str, color: Rgb565) {
+    fn text(&mut self, x: i32, y: i32, text: &str, color: Rgb565, alpha: f32) {
         for (i, ch) in text.chars().enumerate() {
             if let Some(rows) = glyph(ch) {
-                self.sprite(x + i as i32 * 6, y, &rows, 1.0, |p| {
+                self.sprite(x + i as i32 * 6, y, &rows, alpha, |p| {
                     (p == 'X').then_some(color)
                 });
             }
@@ -805,7 +882,7 @@ mod tests {
 
     #[test]
     fn sprites_are_rectangular() {
-        for sprite in [SPORTS_CAR, DRIVER, HEART, SAUCER, ALIEN] {
+        for sprite in [SPORTS_CAR, DRIVER, DRIVER_REAR, HEART, SAUCER, ALIEN] {
             let width = sprite[0].len();
             assert!(sprite.iter().all(|row| row.len() == width));
         }
