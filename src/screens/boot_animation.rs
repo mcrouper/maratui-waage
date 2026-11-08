@@ -41,16 +41,20 @@ const FADE_OUT: f32 = 10.9;
 // ── Layout (scene pixels) ────────────────────────────────────────────────────────────────────
 const SIDEWALK_Y: i32 = 60;
 const ROAD_Y: i32 = 64;
-const CAR_Y: i32 = 63;
-const CAR_PARK_X: f32 = 40.0;
+/// Car and driver are drawn this much larger than their sprites.
+const BIG: f32 = 1.5;
+const CAR_Y: i32 = 57;
+const CAR_PARK_X: f32 = 26.0;
 const CAR_ENTRY_X: f32 = 165.0;
-const DRIVER_Y: i32 = 56;
+/// Driver's top edge standing on the sidewalk; her shoes end at `DRIVER_FEET_Y`.
+const DRIVER_Y: i32 = 45;
+const DRIVER_FEET_Y: i32 = DRIVER_Y + 35;
 /// Where she stands: just behind the parked car.
-const SPOT_X: f32 = CAR_PARK_X + 52.0;
+const SPOT_X: f32 = CAR_PARK_X + 52.0 * BIG;
 /// Saucer center while hovering above her.
-const HOVER: (f32, f32) = (SPOT_X + 5.0, 24.0);
+const HOVER: (f32, f32) = (SPOT_X + 5.5 * BIG, 24.0);
 /// How far the beam lifts her: from the sidewalk up into the saucer's belly.
-const LIFT_PX: f32 = 28.0;
+const LIFT_PX: f32 = 22.0;
 
 pub struct BootAnimation {
     canvas: Vec<Rgb565>,
@@ -271,11 +275,12 @@ fn paint_car(c: &mut Canvas, car_x: f32, t: f32) {
     let moving = (CAR_ARRIVE.0..CAR_ARRIVE.1).contains(&t);
 
     // Headlight beam ahead (the car faces left).
-    for d in 1..34 {
+    let light_y = CAR_Y + (8.0 * BIG) as i32;
+    for d in 1..44 {
         let spread = d as f32 * 0.3;
-        let alpha = 0.3 * (1.0 - d as f32 / 34.0);
+        let alpha = 0.3 * (1.0 - d as f32 / 44.0);
         for dy in -spread as i32..=spread as i32 {
-            c.blend(x - d, CAR_Y + 8 + dy, rgb(0xFFF0B0), alpha);
+            c.blend(x - d, light_y + dy, rgb(0xFFF0B0), alpha);
         }
     }
 
@@ -283,23 +288,23 @@ fn paint_car(c: &mut Canvas, car_x: f32, t: f32) {
     if moving {
         for k in 0..4 {
             let age = (t * 3.0 + k as f32 / 4.0).fract();
-            let px = car_x + 48.0 + age * 8.0;
-            let py = (CAR_Y + 11) as f32 - age * 3.0;
-            c.disc(px, py, 1.0 + age * 2.0, rgb(0x9A98A8), (1.0 - age) * 0.45);
+            let px = car_x + 48.0 * BIG + age * 10.0;
+            let py = CAR_Y as f32 + 11.0 * BIG - age * 4.0;
+            c.disc(px, py, 1.5 + age * 3.0, rgb(0x9A98A8), (1.0 - age) * 0.45);
         }
     }
 
-    c.sprite(x, CAR_Y, SPORTS_CAR, 1.0, car_color);
+    c.sprite_scaled(x, CAR_Y, SPORTS_CAR, BIG, 1.0, car_color);
 
     // Wheels, spokes turning with the distance rolled.
-    let angle = car_x / 4.0;
-    for wheel_x in [9, 37] {
-        let (cx, cy) = ((x + wheel_x) as f32 + 0.5, (CAR_Y + 12) as f32 + 0.5);
-        c.disc(cx, cy, 4.3, rgb(0x141414), 1.0);
-        c.disc(cx, cy, 2.7, rgb(0xB8BCC4), 1.0);
+    let angle = car_x / (4.0 * BIG);
+    for wheel_x in [9.5, 37.5] {
+        let (cx, cy) = (x as f32 + wheel_x * BIG, CAR_Y as f32 + 12.5 * BIG);
+        c.disc(cx, cy, 4.3 * BIG, rgb(0x141414), 1.0);
+        c.disc(cx, cy, 2.7 * BIG, rgb(0xB8BCC4), 1.0);
         for spoke in 0..2 {
             let a = angle + spoke as f32 * FRAC_PI_2;
-            let (dx, dy) = (a.cos() * 2.2, a.sin() * 2.2);
+            let (dx, dy) = (a.cos() * 2.2 * BIG, a.sin() * 2.2 * BIG);
             c.line(cx - dx, cy - dy, cx + dx, cy + dy, rgb(0x5A5E66));
         }
     }
@@ -308,7 +313,7 @@ fn paint_car(c: &mut Canvas, car_x: f32, t: f32) {
 /// Driver x, how far the beam lifted her (`0..=1`) and whether she's walking, or `None` while
 /// she's in the car or gone into the saucer.
 fn driver_pos(t: f32, car_x: f32) -> Option<(f32, f32, bool)> {
-    let door = car_x + 22.0;
+    let door = car_x + 22.0 * BIG;
     if t < DRIVER_OUT.0 || t >= ABDUCT.1 {
         None
     } else if t < DRIVER_OUT.1 {
@@ -325,7 +330,7 @@ fn paint_driver(c: &mut Canvas, x: f32, lift: f32, t: f32, walking: bool, alpha:
     let floating = lift > 0.0;
     // Floating up, she sways in the beam.
     let sway = if floating {
-        ((t * 4.0).sin() * 1.5).round() as i32
+        ((t * 4.0).sin() * 2.0).round() as i32
     } else {
         0
     };
@@ -336,60 +341,72 @@ fn paint_driver(c: &mut Canvas, x: f32, lift: f32, t: f32, walking: bool, alpha:
     let y = DRIVER_Y - i32::from(walking && step) - (lift * LIFT_PX).round() as i32;
     let skin = rgb(0xF5C8A8);
 
+    // The sprite and its limbs are laid out in sprite pixels and scaled up by `BIG` here.
+    let (ox, oy) = (x as f32, y as f32);
+    let rect = |c: &mut Canvas, lx: f32, ly: f32, w: f32, h: f32, color: Rgb565| {
+        c.blend_rect_f(ox + lx * BIG, oy + ly * BIG, w * BIG, h * BIG, color, alpha);
+    };
+    let limb = |c: &mut Canvas, lx0: f32, ly0: f32, lx1: f32, ly1: f32| {
+        let (x0, y0) = (
+            (ox + lx0 * BIG).round() as i32,
+            (oy + ly0 * BIG).round() as i32,
+        );
+        let (x1, y1) = (
+            (ox + lx1 * BIG).round() as i32,
+            (oy + ly1 * BIG).round() as i32,
+        );
+        c.blend_line(x0, y0, x1, y1, skin, alpha);
+        c.blend_line(x0 + 1, y0, x1 + 1, y1, skin, alpha);
+    };
+
     let body = if mooning { DRIVER_REAR } else { DRIVER };
-    c.sprite(x, y, body, alpha, driver_color);
+    c.sprite_scaled(x, y, body, BIG, alpha, driver_color);
 
     // Legs (stepping while walking, dangling while floating) and shoes.
     let (left_lift, right_lift) = match (walking, step, floating) {
-        (true, false, _) => (1, 0),
-        (true, true, _) => (0, 1),
-        (false, _, true) => (i32::from(step), i32::from(!step)),
-        _ => (0, 0),
+        (true, false, _) => (1.0, 0.0),
+        (true, true, _) => (0.0, 1.0),
+        (false, _, true) => (f32::from(u8::from(step)), f32::from(u8::from(!step))),
+        _ => (0.0, 0.0),
     };
-    for (leg_x, leg_lift) in [(4, left_lift), (6, right_lift)] {
-        let bottom = y + 22 - leg_lift;
-        c.blend_rect(x + leg_x, y + 17, 1, bottom - (y + 17), skin, alpha);
-        c.blend_rect(
-            x + leg_x - 1 + (leg_x / 6),
-            bottom,
-            2,
-            1,
-            rgb(0xC01030),
-            alpha,
-        );
+    for (leg_x, leg_lift) in [(4.0, left_lift), (6.0, right_lift)] {
+        let bottom = 22.0 - leg_lift;
+        rect(c, leg_x, 17.0, 1.0, bottom - 17.0, skin);
+        let toe = if leg_x > 5.0 { 0.0 } else { -1.0 };
+        rect(c, leg_x + toe, bottom, 2.0, 1.0, rgb(0xC01030));
     }
 
     if mooning {
         // Both hands hold the skirt up.
-        c.blend_line(x + 1, y + 9, x + 1, y + 12, skin, alpha);
-        c.blend_line(x + 9, y + 9, x + 9, y + 12, skin, alpha);
+        limb(c, 1.0, 9.0, 1.0, 12.0);
+        limb(c, 9.0, 9.0, 9.0, 12.0);
         return;
     }
 
     // Left arm holds a coffee to go.
-    c.blend_line(x + 1, y + 10, x, y + 14, skin, alpha);
-    c.blend_rect(x - 2, y + 12, 2, 3, rgb(0xF4F0E8), alpha);
-    c.blend_rect(x - 2, y + 13, 2, 1, rgb(0x8A5A30), alpha);
+    limb(c, 1.0, 10.0, 0.0, 14.0);
+    rect(c, -2.0, 12.0, 2.0, 3.0, rgb(0xF4F0E8));
+    rect(c, -2.0, 13.0, 2.0, 1.0, rgb(0x8A5A30));
 
     // Right arm swings while walking, waves while standing, flails while floating.
     let wave = (t * if floating { 9.0 } else { 5.0 }) as i32 % 2 == 0;
     let hand = match (walking, wave) {
-        (true, _) => (x + 10, y + 15 - i32::from(step)),
-        (false, true) => (x + 12, y + 3),
-        (false, false) => (x + 10, y + 2),
+        (true, _) => (10.0, 15.0 - f32::from(u8::from(step))),
+        (false, true) => (12.0, 3.0),
+        (false, false) => (10.0, 2.0),
     };
-    c.blend_line(x + 9, y + 10, hand.0, hand.1, skin, alpha);
+    limb(c, 9.0, 10.0, hand.0, hand.1);
 
     // Hair blowing in the wind.
-    let flutter = (t * 6.0).sin() > 0.0;
-    c.blend(x + 10, y + 4 + i32::from(flutter), rgb(0xF2D272), alpha);
-    c.blend(x + 10, y + 7 - i32::from(flutter), rgb(0xC9A048), alpha);
+    let flutter = f32::from(u8::from((t * 6.0).sin() > 0.0));
+    rect(c, 10.0, 4.0 + flutter, 1.0, 1.0, rgb(0xF2D272));
+    rect(c, 10.0, 7.0 - flutter, 1.0, 1.0, rgb(0xC9A048));
 
     // A heart floating up while she waves.
     let rise = phase(t, WAVE.0, WAVE.1);
     if !walking && !floating && rise > 0.0 && rise < 1.0 {
-        let heart_y = y - 6 - (rise * 14.0) as i32;
-        c.sprite(x + 3, heart_y, HEART, alpha * (1.0 - rise), |ch| {
+        let heart_y = y - 8 - (rise * 16.0) as i32;
+        c.sprite_scaled(x + 4, heart_y, HEART, BIG, alpha * (1.0 - rise), |ch| {
             (ch == 'P').then(|| rgb(0xFF5A8A))
         });
     }
@@ -420,10 +437,10 @@ fn ufo_pos(t: f32) -> Option<(f32, f32)> {
 fn paint_beam(c: &mut Canvas, ux: f32, uy: f32, t: f32) {
     let on = phase(t, BEAM.0, BEAM.0 + 0.3).min(1.0 - phase(t, BEAM.1 - 0.3, BEAM.1));
     let top = uy as i32 + 5;
-    let bottom = DRIVER_Y + 23;
+    let bottom = DRIVER_FEET_Y;
     for y in top..bottom {
         let f = (y - top) as f32 / (bottom - top) as f32;
-        let half = 4.0 + f * 9.0;
+        let half = 4.0 + f * 12.0;
         // Bright bands running down the beam.
         let band = ((y as f32 * 0.5 - t * 12.0).sin() * 0.5 + 0.5) * 0.15;
         for x in (ux - half) as i32..=(ux + half) as i32 {
@@ -795,6 +812,37 @@ impl Canvas<'_> {
             let x = x0 + (x1 - x0) * s / steps;
             let y = y0 + (y1 - y0) * s / steps;
             self.blend(x, y, color, alpha);
+        }
+    }
+
+    /// `blend_rect` with fractional coordinates, rounded to whole pixels (at least one).
+    fn blend_rect_f(&mut self, x: f32, y: f32, width: f32, height: f32, color: Rgb565, alpha: f32) {
+        let (x0, y0) = (x.round() as i32, y.round() as i32);
+        let (x1, y1) = ((x + width).round() as i32, (y + height).round() as i32);
+        self.blend_rect(x0, y0, (x1 - x0).max(1), (y1 - y0).max(1), color, alpha);
+    }
+
+    /// `sprite` enlarged by `scale` (nearest neighbour).
+    fn sprite_scaled(
+        &mut self,
+        x: i32,
+        y: i32,
+        rows: &[&str],
+        scale: f32,
+        alpha: f32,
+        color: impl Fn(char) -> Option<Rgb565>,
+    ) {
+        let (width, height) = (rows[0].len(), rows.len());
+        let out_w = (width as f32 * scale).round() as i32;
+        let out_h = (height as f32 * scale).round() as i32;
+        for dy in 0..out_h {
+            let row = rows[(((dy as f32 + 0.5) / scale) as usize).min(height - 1)].as_bytes();
+            for dx in 0..out_w {
+                let ch = row[(((dx as f32 + 0.5) / scale) as usize).min(width - 1)] as char;
+                if let Some(c) = color(ch) {
+                    self.blend(x + dx, y + dy, c, alpha);
+                }
+            }
         }
     }
 
