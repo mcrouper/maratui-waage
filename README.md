@@ -33,7 +33,7 @@ The primary screen. Shows all real-time machine data:
 - **Shot gauge ("%")** — tracks extracted weight against a 40g target, not elapsed time
 - **Shot quality label** — post-extraction assessment (UNDEREXTRACTED / GOOD / PERFECT / LONG SHOT / BLONDING) shown after the pump stops
 - **Cup counter** — total shots brewed, received via MQTT
-- **Tank water** — remaining water in the 2.3 L tank, tracked per pump run (weighed on the scale, or estimated from pump time) and saved across reboots; at 500 ml or less a popup asks to confirm the refill with a short press
+- **Tank water** — remaining water in the 2.3 L tank, tracked per pump run (weighed on the scale, or estimated from pump time) and saved across reboots; at 150 ml or less a popup asks to confirm the refill with a short press
 
 ### Graphs
 

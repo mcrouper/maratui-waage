@@ -18,7 +18,7 @@
 /// Tank capacity; a confirmed refill resets the level to this.
 pub const TANK_CAPACITY_ML: u32 = 2300;
 /// Remaining water at or below which the refill warning shows.
-pub const LOW_WATER_ML: u32 = 500;
+pub const LOW_WATER_ML: u32 = 150;
 /// Case A: pump flow without back pressure (boiler refill, rinsing).
 pub const FREE_FLOW_ML_PER_S: f32 = 5.0;
 /// Case C: assumed shot flow when no scale is available.
