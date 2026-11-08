@@ -96,6 +96,11 @@ impl SmoothField {
         self.drawn = None;
     }
 
+    /// Whether `text` fits `area`'s width without any glyph being cut off.
+    pub fn fits(&self, area: Rectangle, text: &str) -> bool {
+        text.chars().map(|ch| u32::from(self.set.width_of(ch))).sum::<u32>() <= area.size.width
+    }
+
     /// Show `text` centered in `area` (in display pixels) in `color`.
     pub fn draw<D>(
         &mut self,
@@ -175,7 +180,8 @@ impl SmoothField {
 
 /// Stream one glyph box (glyph plus its background) to the display in a single window write.
 /// Rows outside `clip` are cut off; boxes that would spill sideways (text too wide for its
-/// field) are skipped rather than drawn over neighboring UI.
+/// field) are skipped rather than drawn over neighboring UI — their visible part is cleared,
+/// so nothing drawn there before is left standing.
 fn draw_glyph<D>(
     display: &mut D,
     set: &'static GlyphSet,
@@ -191,7 +197,7 @@ where
     let rect = Rectangle::new(top_left, Size::new(u32::from(width), u32::from(set.height)));
     let visible = clip.intersection(&rect);
     if visible.size.width != rect.size.width || visible.size.height == 0 {
-        return Ok(());
+        return display.fill_solid(&visible, BACKGROUND);
     }
 
     match set.glyph(ch) {
@@ -261,6 +267,17 @@ mod tests {
                 assert_eq!(glyph.coverage.len(), pixels.div_ceil(2));
             }
         }
+    }
+
+    #[test]
+    fn three_digit_negative_weight_needs_the_whole_gram_fallback() {
+        // The Dashboard's Weight field: 175 px wide.
+        let field = SmoothField::new(&LARGE_DIGITS);
+        let area = Rectangle::new(Point::new(70, 126), Size::new(175, 56));
+        assert!(field.fits(area, "-37,1"));
+        assert!(!field.fits(area, "-137,1"));
+        assert!(field.fits(area, "-137"));
+        assert!(field.fits(area, "1234"));
     }
 
     #[test]
