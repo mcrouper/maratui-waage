@@ -30,6 +30,11 @@ pub trait MaraUiApp {
     /// Process time-based transitions (auto-return after extraction)
     fn tick(&mut self) {}
 
+    /// Water tank level to save to flash now, if any (after a refill, or once it moved enough).
+    fn take_water_level_to_persist(&mut self) -> Option<u32> {
+        None
+    }
+
     /// Returns `true` if the backlight should be on
     fn backlight_active(&self) -> bool {
         true
@@ -160,6 +165,14 @@ impl MaraUiApp for MaraUi {
 
     fn take_outbound_mqtt_messages(&mut self) -> Vec<MqttOutboundMessage> {
         self.state.take_outbound_mqtt_messages()
+    }
+
+    fn tick(&mut self) {
+        AppStateMachine::tick(&mut self.state, Instant::now());
+    }
+
+    fn take_water_level_to_persist(&mut self) -> Option<u32> {
+        self.state.water.take_level_to_persist()
     }
 
     fn take_redraw_request(&mut self) -> bool {

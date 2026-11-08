@@ -136,6 +136,14 @@ fn run_app_hardware(mut app: impl MaraUiApp) {
         .clone()
         .and_then(|p| EspNvs::new(p, "scale", true).ok());
     let mut calibration = load_calibration(scale_nvs.as_ref());
+
+    // ── Water tank level ───────────────────────────────────────────────────
+    let mut water_nvs: Option<EspNvs<NvsDefault>> = nvs_partition
+        .clone()
+        .and_then(|p| EspNvs::new(p, "water", true).ok());
+    if let Some(remaining_ml) = load_water_level(water_nvs.as_ref()) {
+        app.handle_event(AppEvent::WaterLevelRestored { remaining_ml });
+    }
     let mut hx711 = Hx711::new(
         hx711_dout_left,
         hx711_dout_right,
@@ -242,6 +250,14 @@ fn run_app_hardware(mut app: impl MaraUiApp) {
 
     loop {
         app.tick();
+        if let Some(remaining_ml) = app.take_water_level_to_persist() {
+            if save_water_level(&mut water_nvs, remaining_ml) {
+                app.handle_event(AppEvent::PublishMqttEvent {
+                    topic_suffix: "water".into(),
+                    payload: crate::state::fsm::water_payload("saved", remaining_ml, None),
+                });
+            }
+        }
 
         button1_state.update(button1.is_low(), |press_type| {
             app.handle_press(Button::Button1(press_type));
@@ -517,6 +533,8 @@ const STATUS_INTERVAL: Duration = Duration::from_secs(30);
 const WIFI_CHECK_INTERVAL: Duration = Duration::from_secs(10);
 const WIFI_RECONNECT_INTERVAL: Duration = Duration::from_secs(15);
 const MIN_STAGE_MS: u64 = 800;
+/// NVS key (in the `"water"` namespace) of the remaining tank water in ml.
+const WATER_LEVEL_KEY: &str = "level_ml";
 /// How long Button1 must be held to start the scale calibration wizard.
 const CALIBRATION_HOLD_DURATION: Duration = Duration::from_secs(3);
 
@@ -589,6 +607,35 @@ fn save_calibration(nvs: &mut Option<EspNvs<NvsDefault>>, calibration: &DualScal
     };
     if let Err(e) = nvs.set_raw("scale", &calibration.to_bytes()) {
         warn!("Failed to persist dual scale calibration: {:?}", e);
+    }
+}
+
+/// Water tank level saved by `save_water_level`, or `None` (full tank) if none was saved yet.
+fn load_water_level(nvs: Option<&EspNvs<NvsDefault>>) -> Option<u32> {
+    match nvs?.get_u32(WATER_LEVEL_KEY) {
+        Ok(level) => level,
+        Err(e) => {
+            warn!("Failed to read stored water level: {:?}", e);
+            None
+        }
+    }
+}
+
+/// Returns whether the level was written.
+fn save_water_level(nvs: &mut Option<EspNvs<NvsDefault>>, remaining_ml: u32) -> bool {
+    let Some(nvs) = nvs.as_mut() else {
+        warn!("NVS unavailable — water level will not persist across reboot");
+        return false;
+    };
+    match nvs.set_u32(WATER_LEVEL_KEY, remaining_ml) {
+        Ok(()) => {
+            info!("Water level saved: {} ml", remaining_ml);
+            true
+        }
+        Err(e) => {
+            warn!("Failed to persist water level: {:?}", e);
+            false
+        }
     }
 }
 

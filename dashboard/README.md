@@ -35,6 +35,8 @@ of the Node-RED user (`--data-dir` to change) and reloads them on start:
   display shows it too — this replaces the Home Assistant automation for setups without HA. To set
   a start value: `mosquitto_pub -r -t mara/cup_counter -m 1234` (plus `-h/-u/-P`); the flow adopts it.
 
+- `water.json` — tank level and the last 30 water log entries from `mara/water`
+
 Temperature history and events stay in memory only.
 
 `reducer.js` is the single implementation of how MQTT messages update that state. `deploy.py`
@@ -59,6 +61,7 @@ Requires the Node-RED admin API to be reachable without auth (or add auth handli
 ## Topics used
 
 `mara/telemetry`, `mara/status`, `mara/events` (incl. `weight_g` on `shot_ended`), `mara/scale`,
-`mara/cup_counter` — see [docs/home-assistant.md](../docs/home-assistant.md#mqtt-topics-published-by-maratui).
+`mara/cup_counter`, `mara/water` (`{"type":"drawn|saved|refilled|empty|restored","remaining_ml":…,"low":…}`,
+`drawn` adds `ml`, `kind` and `estimated`) — see [docs/home-assistant.md](../docs/home-assistant.md#mqtt-topics-published-by-maratui).
 The `mara` prefix is hardcoded in `deploy.py` (`TOPIC`); change it there if
 `MARATUI_MQTT_TOPIC_PREFIX` differs.

@@ -29,6 +29,9 @@ pub mod screens;
 /// Anti-aliased digit readouts drawn directly onto the display (bypassing Ratatui).
 pub mod smooth_digits;
 
+/// Water tank level tracking (consumption per pump run, refill warning). Hardware-agnostic.
+pub mod water;
+
 /// State management (FSM).
 pub mod state;
 

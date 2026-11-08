@@ -33,6 +33,7 @@ The primary screen. Shows all real-time machine data:
 - **Shot gauge ("%")** — tracks extracted weight against a 40g target, not elapsed time
 - **Shot quality label** — post-extraction assessment (UNDEREXTRACTED / GOOD / PERFECT / LONG SHOT / BLONDING) shown after the pump stops
 - **Cup counter** — total shots brewed, received via MQTT
+- **Tank water** — remaining water in the 2.3 L tank, tracked per pump run (weighed on the scale, or estimated from pump time) and saved across reboots; at 150 ml or less a popup asks to confirm the refill with a short press
 
 ### Graphs
 
@@ -136,7 +137,7 @@ Target board: **ESP32 Type-C** with an external **ILI9341** 240×320 TFT display
 
 | Press             | Action                          |
 |-------------------|---------------------------------|
-| Short             | Zero the scale                  |
+| Short             | Zero the scale (confirms the tank refill while the low-water warning shows) |
 | Double (fast 2x)  | Toggle Dashboard ↔ Graphs       |
 | Double (on loading)| Toggle display backlight       |
 | Long              | Enter / exit Debug overlay      |

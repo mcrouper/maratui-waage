@@ -76,7 +76,7 @@ header .sub { color: var(--muted); font-size: 13px; }
 @keyframes pulse { 50% { opacity: .35; } }
 header .spacer { flex: 1; }
 
-.tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+.tiles { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
 .tile, .card {
   background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow);
 }
@@ -87,6 +87,11 @@ header .spacer { flex: 1; }
 .tile .foot { color: var(--muted); font-size: 13px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tile.shot.active { border-color: var(--accent); }
 .tile.shot.active .value { color: var(--accent); }
+.tile.low { border-color: color-mix(in srgb, var(--bad) 55%, var(--border)); }
+.tile.low .value { color: var(--bad); }
+.tank { height: 6px; border-radius: 3px; background: var(--surface-2); margin-top: 7px; overflow: hidden; }
+.tank i { display: block; height: 100%; width: 0; background: var(--hx); border-radius: 3px; transition: width .4s; }
+.tile.low .tank i { background: var(--bad); }
 
 .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 .chip {
@@ -144,8 +149,10 @@ dl.kv dd { margin: 0; text-align: right; }
 .stack { display: grid; gap: 12px; align-content: start; }
 .scroll { max-height: 290px; overflow: auto; }
 
-@media (max-width: 980px) {
+@media (max-width: 1100px) {
   .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 980px) {
   .grid { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 560px) {
@@ -189,6 +196,12 @@ dl.kv dd { margin: 0; text-align: right; }
       <div class="label">Tassen</div>
       <div class="value num" id="cupsVal">–</div>
       <div class="foot" id="cupsFoot">gesamt</div>
+    </div>
+    <div class="tile" id="tankTile">
+      <div class="label">Wassertank</div>
+      <div class="value num" id="tankVal">–</div>
+      <div class="tank"><i id="tankBar"></i></div>
+      <div class="foot num" id="tankFoot">keine Daten</div>
     </div>
   </section>
 
@@ -242,6 +255,11 @@ dl.kv dd { margin: 0; text-align: right; }
             <tbody id="shotRows"><tr><td colspan="5" class="muted">Noch keine Shots gespeichert</td></tr></tbody>
           </table>
         </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>Wasser-Log</h2></div>
+        <ul class="events scroll" id="waterLog"><li class="muted">Noch keine Wasserdaten</li></ul>
       </section>
 
       <section class="card">
@@ -309,6 +327,19 @@ dl.kv dd { margin: 0; text-align: right; }
     }
   };
 
+  var liters = function (ml) { return (ml / 1000).toFixed(2).replace(".", ","); };
+  var drawKind = { pump_only: "Pumpe ohne Bezug", shot_measured: "Bezug, gewogen", shot_estimated: "Bezug, geschätzt" };
+  var waterText = function (w) {
+    switch (w.type) {
+      case "drawn": return "−" + w.ml + " ml · " + (drawKind[w.kind] || w.kind) + " · Rest " + w.remaining_ml + " ml";
+      case "saved": return "Wasserstand gespeichert: " + w.remaining_ml + " ml";
+      case "refilled": return "Tank nachgefüllt: " + w.remaining_ml + " ml";
+      case "empty": return "Maschine meldet: kein Wasser → 0 ml";
+      case "restored": return "Neustart, Wasserstand geladen: " + w.remaining_ml + " ml";
+      default: return w.type + " · " + w.remaining_ml + " ml";
+    }
+  };
+
   // ---------- rendering: tiles, chips, lists ----------
   function renderStatus() {
     var now = serverNow();
@@ -364,6 +395,15 @@ dl.kv dd { margin: 0; text-align: right; }
 
     $("cupsVal").textContent = S.cups != null ? S.cups.toLocaleString("de-DE") : "–";
 
+    var W = S.water;
+    if (W) {
+      $("tankTile").classList.toggle("low", W.low);
+      $("tankVal").innerHTML = liters(W.remaining_ml) + "<small>L</small>";
+      $("tankBar").style.width = Math.max(0, Math.min(100, W.remaining_ml / MARA_TANK_ML * 100)) + "%";
+      var lastDraw = W.log.filter(function (e) { return e.type === "drawn"; })[0];
+      $("tankFoot").textContent = W.low ? "nachfüllen!" : lastDraw ? "zuletzt −" + lastDraw.ml + " ml · " + ago(now - lastDraw.ts) : "von " + liters(MARA_TANK_ML) + " L";
+    }
+
     var st = S.status;
     if (st) {
       $("devWifi").textContent = st.wifi_ssid || "–";
@@ -393,6 +433,10 @@ dl.kv dd { margin: 0; text-align: right; }
       return "<li><time class='num'>" + clockS(e.ts) + "</time><span>" + esc(eventText(e)) + "</span></li>";
     });
     $("events").innerHTML = ev.length ? ev.join("") : "<li class='muted'>Keine Ereignisse</li>";
+    var wl = (S.water ? S.water.log : []).map(function (w) {
+      return "<li><time class='num'>" + clockS(w.ts) + "</time><span>" + esc(waterText(w)) + "</span></li>";
+    });
+    $("waterLog").innerHTML = wl.length ? wl.join("") : "<li class='muted'>Noch keine Wasserdaten</li>";
   }
 
   // ---------- charts ----------
@@ -616,6 +660,7 @@ dl.kv dd { margin: 0; text-align: right; }
       if (m.kind === "telemetry") parts.push("temp");
       if (m.kind === "telemetry" && S.shot && !S.shot.end) parts.push("shot");
       if (m.kind === "events") parts.push("lists", "shot");
+      if (m.kind === "water") parts.push("lists");
       if (m.kind === "scale" && S.shot && !S.shot.end) parts.push("shot");
       schedule(parts);
     };
