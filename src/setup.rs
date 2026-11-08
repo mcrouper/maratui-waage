@@ -251,7 +251,12 @@ fn run_app_hardware(mut app: impl MaraUiApp) {
     loop {
         app.tick();
         if let Some(remaining_ml) = app.take_water_level_to_persist() {
-            save_water_level(&mut water_nvs, remaining_ml);
+            if save_water_level(&mut water_nvs, remaining_ml) {
+                app.handle_event(AppEvent::PublishMqttEvent {
+                    topic_suffix: "water".into(),
+                    payload: crate::state::fsm::water_payload("saved", remaining_ml, None),
+                });
+            }
         }
 
         button1_state.update(button1.is_low(), |press_type| {
@@ -616,14 +621,21 @@ fn load_water_level(nvs: Option<&EspNvs<NvsDefault>>) -> Option<u32> {
     }
 }
 
-fn save_water_level(nvs: &mut Option<EspNvs<NvsDefault>>, remaining_ml: u32) {
+/// Returns whether the level was written.
+fn save_water_level(nvs: &mut Option<EspNvs<NvsDefault>>, remaining_ml: u32) -> bool {
     let Some(nvs) = nvs.as_mut() else {
         warn!("NVS unavailable — water level will not persist across reboot");
-        return;
+        return false;
     };
     match nvs.set_u32(WATER_LEVEL_KEY, remaining_ml) {
-        Ok(()) => info!("Water level saved: {} ml", remaining_ml),
-        Err(e) => warn!("Failed to persist water level: {:?}", e),
+        Ok(()) => {
+            info!("Water level saved: {} ml", remaining_ml);
+            true
+        }
+        Err(e) => {
+            warn!("Failed to persist water level: {:?}", e);
+            false
+        }
     }
 }
 

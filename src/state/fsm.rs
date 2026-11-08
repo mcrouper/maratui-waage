@@ -68,15 +68,18 @@ impl AppStateMachine {
                 state.error = Some(AppError::WaterRefillNeeded { code });
                 // The machine's own sensor says the tank is empty: trust it over the estimate.
                 state.water.mark_empty();
+                publish_water(state, "empty", None);
             }
 
             AppEvent::WaterLevelRestored { remaining_ml } => {
                 state.water = WaterTank::new(remaining_ml);
+                publish_water(state, "restored", None);
             }
 
             AppEvent::WaterRefillConfirmed => {
                 state.water.refilled();
                 info!("Water tank refilled: {} ml", state.water.remaining_ml());
+                publish_water(state, "refilled", None);
             }
 
             AppEvent::WaterRefillCleared => {
@@ -545,7 +548,7 @@ fn monotonic_ms(now: Instant) -> u64 {
     now.saturating_duration_since(start).as_millis() as u64
 }
 
-fn log_water_draw(state: &GlobalAppState, draw: Option<Draw>) {
+fn log_water_draw(state: &mut GlobalAppState, draw: Option<Draw>) {
     if let Some(draw) = draw {
         info!(
             "Water: {} ml drawn ({:?}{}), {} ml left",
@@ -554,7 +557,30 @@ fn log_water_draw(state: &GlobalAppState, draw: Option<Draw>) {
             if draw.is_estimated() { ", estimated" } else { "" },
             state.water.remaining_ml()
         );
+        publish_water(state, "drawn", Some(draw));
     }
+}
+
+fn publish_water(state: &mut GlobalAppState, event: &str, draw: Option<Draw>) {
+    let payload = water_payload(event, state.water.remaining_ml(), draw);
+    state.enqueue_mqtt_message("water", payload);
+}
+
+/// `<prefix>/water` payload: `event` is `drawn` (with the booked run), `saved` (written to NVS),
+/// `refilled`, `empty` (machine's no-water report) or `restored` (loaded from NVS at boot).
+pub fn water_payload(event: &str, remaining_ml: u32, draw: Option<Draw>) -> String {
+    let draw_part = draw.map_or(String::new(), |d| {
+        format!(
+            ",\"ml\":{},\"kind\":\"{}\",\"estimated\":{}",
+            d.ml,
+            d.kind.as_str(),
+            d.is_estimated()
+        )
+    });
+    format!(
+        "{{\"type\":\"{event}\",\"remaining_ml\":{remaining_ml},\"low\":{}{draw_part}}}",
+        remaining_ml <= crate::water::LOW_WATER_ML
+    )
 }
 
 #[cfg(test)]
@@ -1126,5 +1152,29 @@ mod tests {
 
         AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Long));
         assert_eq!(state.calibration_step, None);
+    }
+
+    #[test]
+    fn water_events_are_published() {
+        let mut state = GlobalAppState::default();
+        AppStateMachine::handle_event(&mut state, AppEvent::WaterRefillConfirmed);
+        let msg = state.outbound_mqtt.back().unwrap();
+        assert_eq!(msg.topic_suffix, "water");
+        assert_eq!(
+            msg.payload,
+            r#"{"type":"refilled","remaining_ml":2300,"low":false}"#
+        );
+    }
+
+    #[test]
+    fn water_draw_payload_carries_the_run() {
+        let draw = Draw {
+            ml: 65,
+            kind: crate::water::DrawKind::ShotMeasured,
+        };
+        assert_eq!(
+            water_payload("drawn", 140, Some(draw)),
+            r#"{"type":"drawn","remaining_ml":140,"low":true,"ml":65,"kind":"shot_measured","estimated":false}"#
+        );
     }
 }

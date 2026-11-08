@@ -51,6 +51,17 @@ pub enum DrawKind {
     ShotEstimated,
 }
 
+impl DrawKind {
+    /// Snake-case name used in the `<prefix>/water` MQTT payload.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DrawKind::PumpOnly => "pump_only",
+            DrawKind::ShotMeasured => "shot_measured",
+            DrawKind::ShotEstimated => "shot_estimated",
+        }
+    }
+}
+
 /// Water booked off the tank for one pump run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Draw {
