@@ -290,12 +290,13 @@ impl AppStateMachine {
         }
 
         // Short press manually zeros the scale, regardless of screen — a quick way to tare
-        // without waiting for a shot to start. Only while the low-water warning shows, it
+        // without waiting for a shot to start. Only while the low-water popup shows, it
         // confirms the refill instead (a press on a dark screen just wakes it, so the warning
-        // can't be confirmed unseen).
+        // can't be confirmed unseen). During a shot and the delay after it the popup is hidden,
+        // so the press tares even though the banner is red.
         if let Button::Button1(ButtonPressType::Short) = button {
             let now = Instant::now();
-            if state.water_warning_visible(now) {
+            if state.water_popup_visible(now) {
                 let was_lit = state.backlight_should_be_on(now);
                 state.last_activity_at = Some(now);
                 if was_lit {
@@ -819,6 +820,21 @@ mod tests {
         AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Short));
 
         assert!(state.backlight_should_be_on(Instant::now()));
+        assert_eq!(state.water.remaining_ml(), crate::water::LOW_WATER_ML);
+    }
+
+    #[test]
+    fn test_short_press_tares_while_popup_waits_after_a_shot() {
+        let mut state = low_water_state();
+        AppStateMachine::handle_event(&mut state, AppEvent::WeightUpdated { weight_dg: 100 });
+        AppStateMachine::handle_event(&mut state, AppEvent::WeightUpdated { weight_dg: 400 });
+        state.last_shot_ended_at = Some(Instant::now());
+        assert!(state.water_warning_visible(Instant::now()));
+        assert!(!state.water_popup_visible(Instant::now()));
+
+        AppStateMachine::handle_button_press(&mut state, Button::Button1(ButtonPressType::Short));
+
+        assert_eq!(state.weight_dg, Some(0));
         assert_eq!(state.water.remaining_ml(), crate::water::LOW_WATER_ML);
     }
 
